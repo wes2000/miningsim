@@ -103,6 +103,7 @@ pub fn collide_player_with_grid_system(
 pub fn dig_input_system(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     win_q: Query<&Window, With<PrimaryWindow>>,
     cam_q: Query<(&Camera, &GlobalTransform), With<crate::components::MainCamera>>,
     player_q: Query<&Transform, With<Player>>,
@@ -112,7 +113,8 @@ pub fn dig_input_system(
     time: Res<Time>,
 ) {
     cooldown.0.tick(time.delta());
-    if !mouse.pressed(MouseButton::Left) { return; }
+    let dig_held = mouse.pressed(MouseButton::Left) || keys.pressed(KeyCode::Space);
+    if !dig_held { return; }
     if !cooldown.0.finished() { return; }
 
     let Ok(win) = win_q.get_single() else { return };
