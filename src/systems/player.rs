@@ -4,6 +4,7 @@ use crate::components::{ChunkDirty, OreDrop, Player, TerrainChunk, Velocity};
 use crate::dig::{self, DigStatus};
 use crate::grid::{Grid, OreType};
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
+use crate::systems::hud::ore_visual_color;
 use crate::systems::setup::TILE_SIZE_PX;
 
 #[derive(Resource)]
@@ -173,16 +174,10 @@ pub fn dig_input_system(
 
     // spawn ore drop
     if result.ore != OreType::None {
-        let color = match result.ore {
-            OreType::Copper => Color::srgb(0.85, 0.45, 0.20),
-            OreType::Silver => Color::srgb(0.85, 0.85, 0.92),
-            OreType::Gold   => Color::srgb(0.95, 0.78, 0.25),
-            OreType::None   => Color::WHITE,
-        };
         commands.spawn((
             OreDrop { ore: result.ore },
             Sprite {
-                color,
+                color: ore_visual_color(result.ore),
                 custom_size: Some(Vec2::splat(6.0)),
                 ..default()
             },

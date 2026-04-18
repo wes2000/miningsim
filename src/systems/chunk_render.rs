@@ -3,6 +3,7 @@ use crate::components::{ChunkDirty, TerrainChunk};
 use crate::grid::{Grid, Layer, OreType};
 use crate::systems::setup::TILE_SIZE_PX;
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
+use crate::systems::hud::ore_visual_color;
 
 fn layer_color(l: Layer) -> Color {
     match l {
@@ -11,15 +12,6 @@ fn layer_color(l: Layer) -> Color {
         Layer::Deep    => Color::srgb(0.29, 0.23, 0.15),
         Layer::Core    => Color::srgb(0.22, 0.18, 0.12),
         Layer::Bedrock => Color::srgb(0.16, 0.13, 0.10),
-    }
-}
-
-fn ore_color(o: OreType) -> Option<Color> {
-    match o {
-        OreType::None   => None,
-        OreType::Copper => Some(Color::srgb(0.85, 0.45, 0.20)),
-        OreType::Silver => Some(Color::srgb(0.85, 0.85, 0.92)),
-        OreType::Gold   => Some(Color::srgb(0.95, 0.78, 0.25)),
     }
 }
 
@@ -58,10 +50,10 @@ pub fn chunk_remesh_system(
                         Transform::from_translation(Vec3::new(world_x, world_y, 0.0)),
                     ));
 
-                    if let Some(c) = ore_color(t.ore) {
+                    if t.ore != OreType::None {
                         parent.spawn((
                             Sprite {
-                                color: c,
+                                color: ore_visual_color(t.ore),
                                 custom_size: Some(Vec2::splat(TILE_SIZE_PX * 0.5)),
                                 ..default()
                             },
