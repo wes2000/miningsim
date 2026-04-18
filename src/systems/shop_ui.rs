@@ -1,2 +1,132 @@
 use bevy::prelude::*;
-// systems will be added in Task 11
+use crate::components::{ShopButtonKind, ShopUiOpen, ShopUiRoot};
+use crate::economy::{self, Money};
+use crate::inventory::Inventory;
+use crate::tools::{OwnedTools, Tool};
+use crate::systems::hud::current_tool_display_name;
+
+pub fn spawn_shop_ui(mut commands: Commands) {
+    commands
+        .spawn((
+            ShopUiRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(30.0),
+                top: Val::Percent(20.0),
+                width: Val::Px(420.0),
+                padding: UiRect::all(Val::Px(16.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(8.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.10, 0.10, 0.12, 0.92)),
+            Visibility::Hidden,
+        ))
+        .with_children(|panel| {
+            // Title
+            panel.spawn((
+                Text::new("SHOP"),
+                TextFont { font_size: 24.0, ..default() },
+            ));
+            // Sell All button
+            spawn_button(panel, "Sell All Ore", ShopButtonKind::SellAll);
+            // Divider text
+            panel.spawn((
+                Text::new("Tools:"),
+                TextFont { font_size: 18.0, ..default() },
+            ));
+            // Buy Pickaxe / Jackhammer / Dynamite
+            spawn_buy_row(panel, Tool::Pickaxe);
+            spawn_buy_row(panel, Tool::Jackhammer);
+            spawn_buy_row(panel, Tool::Dynamite);
+        });
+}
+
+fn spawn_button(parent: &mut ChildBuilder, label: &str, kind: ShopButtonKind) {
+    parent.spawn((
+        kind,
+        Button,
+        Node {
+            padding: UiRect::all(Val::Px(6.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            width: Val::Px(280.0),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.22, 0.22, 0.28)),
+        BorderColor(Color::srgb(0.35, 0.35, 0.42)),
+    )).with_children(|button| {
+        button.spawn((
+            Text::new(label),
+            TextFont { font_size: 18.0, ..default() },
+        ));
+    });
+}
+
+fn spawn_buy_row(parent: &mut ChildBuilder, tool: Tool) {
+    let price = economy::tool_buy_price(tool);
+    let label = format!("Buy {} - {}c", current_tool_display_name(tool), price);
+    spawn_button(parent, &label, ShopButtonKind::Buy(tool));
+}
+
+pub fn sync_shop_visibility_system(
+    ui_open: Res<ShopUiOpen>,
+    mut q: Query<&mut Visibility, With<ShopUiRoot>>,
+) {
+    if !ui_open.is_changed() { return; }
+    if let Ok(mut vis) = q.get_single_mut() {
+        *vis = if ui_open.0 { Visibility::Visible } else { Visibility::Hidden };
+    }
+}
+
+pub fn update_shop_labels_system(
+    money: Res<Money>,
+    owned: Res<OwnedTools>,
+    buttons_q: Query<(&ShopButtonKind, &Children)>,
+    mut texts_q: Query<&mut Text>,
+) {
+    if !money.is_changed() && !owned.is_changed() { return; }
+    for (kind, children) in buttons_q.iter() {
+        match kind {
+            ShopButtonKind::SellAll => { /* static label */ }
+            ShopButtonKind::Buy(tool) => {
+                let new_label = if owned.0.contains(tool) {
+                    format!("{} - OWNED", current_tool_display_name(*tool))
+                } else {
+                    let price = economy::tool_buy_price(*tool);
+                    format!("Buy {} - {}c", current_tool_display_name(*tool), price)
+                };
+                for c in children.iter() {
+                    if let Ok(mut text) = texts_q.get_mut(*c) {
+                        **text = new_label.clone();
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn handle_shop_buttons_system(
+    ui_open: Res<ShopUiOpen>,
+    interaction_q: Query<(&Interaction, &ShopButtonKind), Changed<Interaction>>,
+    mut inv: ResMut<Inventory>,
+    mut money: ResMut<Money>,
+    mut owned: ResMut<OwnedTools>,
+) {
+    // Defense-in-depth: Bevy does not deliver Interaction events for hidden UI,
+    // but guard here in case system ordering changes or the UI is force-hidden
+    // mid-frame.
+    if !ui_open.0 { return; }
+    for (interaction, kind) in interaction_q.iter() {
+        if *interaction != Interaction::Pressed { continue; }
+        match kind {
+            ShopButtonKind::SellAll => {
+                economy::sell_all(&mut inv, &mut money);
+            }
+            ShopButtonKind::Buy(tool) => {
+                let _ = economy::try_buy(*tool, &mut money, &mut owned);
+                // BuyResult::Ok / NotEnoughMoney / AlreadyOwned handled silently;
+                // UI labels update via Changed<Money> / Changed<OwnedTools>.
+            }
+        }
+    }
+}
