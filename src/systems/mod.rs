@@ -6,4 +6,4 @@ pub mod ore_drop;
 pub mod player;
 pub mod setup;
 pub mod shop;
-pub mod shop_ui;       // will land in Task 11; forward-declare the module here now
+pub mod shop_ui;
