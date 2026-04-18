@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use crate::grid::OreType;
+use crate::tools::Tool;
 
 #[derive(Component)]
 pub struct Player;
@@ -27,3 +28,24 @@ pub struct OreDrop {
 
 #[derive(Component)]
 pub struct MainCamera;
+
+#[derive(Component)]
+pub struct Shop;
+
+#[derive(Component)]
+pub struct ShopUiRoot;
+
+#[derive(Component)]
+pub enum ShopButtonKind {
+    SellAll,
+    Buy(Tool),
+}
+
+#[derive(Component)]
+pub struct MoneyText;
+
+#[derive(Component)]
+pub struct CurrentToolText;
+
+#[derive(bevy::prelude::Resource, Default)]
+pub struct ShopUiOpen(pub bool);

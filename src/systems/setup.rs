@@ -1,7 +1,9 @@
 use bevy::prelude::*;
-use crate::components::{MainCamera, Player, Velocity};
+use crate::components::{MainCamera, Player, Shop, ShopUiOpen, Velocity};
+use crate::economy::Money;
 use crate::inventory::Inventory;
 use crate::terrain_gen;
+use crate::tools::OwnedTools;
 
 pub const TILE_SIZE_PX: f32 = 16.0;
 pub const MAP_W: u32 = 80;
@@ -17,6 +19,9 @@ pub fn setup_world(mut commands: Commands) {
     commands.insert_resource(grid);
     commands.insert_resource(Inventory::default());
     commands.insert_resource(crate::systems::player::DigCooldown::default());
+    commands.insert_resource(Money::default());
+    commands.insert_resource(OwnedTools::default());
+    commands.insert_resource(ShopUiOpen::default());
 
     // Player
     commands.spawn((
@@ -28,6 +33,19 @@ pub fn setup_world(mut commands: Commands) {
             ..default()
         },
         Transform::from_translation(player_world.extend(10.0)),
+    ));
+
+    // Shop
+    let shop_tile = (sp.0 + 3, sp.1);   // 3 tiles right of player spawn
+    let shop_world = tile_center_world(shop_tile.0, shop_tile.1);
+    commands.spawn((
+        Shop,
+        Sprite {
+            color: Color::srgb(0.95, 0.80, 0.20),   // yellow placeholder
+            custom_size: Some(Vec2::splat(14.0)),
+            ..default()
+        },
+        Transform::from_translation(shop_world.extend(5.0)),
     ));
 
     // Camera
