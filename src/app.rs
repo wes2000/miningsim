@@ -1,6 +1,5 @@
 use bevy::prelude::*;
-
-use crate::systems::{camera, setup};
+use crate::systems::{camera, chunk_lifecycle, chunk_render, player, setup};
 
 pub struct MiningSimPlugin;
 
@@ -8,8 +7,10 @@ impl Plugin for MiningSimPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup::setup_world)
             .add_systems(Update, (
-                crate::systems::player::read_input_system,
-                crate::systems::player::apply_velocity_system,
+                player::read_input_system,
+                player::apply_velocity_system,
+                chunk_lifecycle::chunk_lifecycle_system,
+                chunk_render::chunk_remesh_system,
                 camera::camera_follow_system,
             ).chain());
     }
