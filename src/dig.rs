@@ -26,6 +26,6 @@ pub fn try_dig(grid: &mut Grid, x: i32, y: i32) -> DigResult {
         return DigResult { status: DigStatus::AlreadyEmpty, ore: OreType::None };
     }
     let ore = t.ore;
-    grid.set(x, y, crate::grid::Tile { solid: false, layer: t.layer, ore: OreType::None });
+    grid.set(x, y, crate::grid::Tile { solid: false, layer: t.layer, ore: OreType::None, damage: 0 });
     DigResult { status: DigStatus::Ok, ore }
 }

@@ -13,6 +13,7 @@ fn ore_probs(layer: Layer) -> [(OreType, f32); 3] {
         Layer::Dirt  => [(OreType::Copper, 0.04),  (OreType::Silver, 0.005), (OreType::Gold, 0.0)],
         Layer::Stone => [(OreType::Copper, 0.02),  (OreType::Silver, 0.025), (OreType::Gold, 0.003)],
         Layer::Deep  => [(OreType::Copper, 0.005), (OreType::Silver, 0.015), (OreType::Gold, 0.02)],
+        Layer::Core => [(OreType::None, 0.0); 3],
         Layer::Bedrock => [(OreType::None, 0.0); 3],
     }
 }

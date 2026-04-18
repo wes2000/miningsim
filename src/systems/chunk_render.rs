@@ -9,6 +9,7 @@ fn layer_color(l: Layer) -> Color {
         Layer::Dirt    => Color::srgb(0.55, 0.42, 0.27),
         Layer::Stone   => Color::srgb(0.42, 0.33, 0.22),
         Layer::Deep    => Color::srgb(0.29, 0.23, 0.15),
+        Layer::Core    => Color::srgb(0.22, 0.18, 0.12),
         Layer::Bedrock => Color::srgb(0.16, 0.13, 0.10),
     }
 }

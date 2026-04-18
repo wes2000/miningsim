@@ -3,8 +3,8 @@ use miningsim::dig::{self, DigStatus};
 
 fn make_grid() -> Grid {
     let mut g = Grid::new(10, 10);
-    g.set(3, 3, Tile { solid: true, layer: Layer::Dirt, ore: OreType::Copper });
-    g.set(0, 0, Tile { solid: true, layer: Layer::Bedrock, ore: OreType::None });
+    g.set(3, 3, Tile { solid: true, layer: Layer::Dirt, ore: OreType::Copper, damage: 0 });
+    g.set(0, 0, Tile { solid: true, layer: Layer::Bedrock, ore: OreType::None, damage: 0 });
     g
 }
 
