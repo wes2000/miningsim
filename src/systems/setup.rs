@@ -16,6 +16,7 @@ pub fn setup_world(mut commands: Commands) {
 
     commands.insert_resource(grid);
     commands.insert_resource(Inventory::default());
+    commands.insert_resource(crate::systems::player::DigCooldown::default());
 
     // Player
     commands.spawn((

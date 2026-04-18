@@ -1,7 +1,21 @@
 use bevy::prelude::*;
-use crate::components::{Player, Velocity};
-use crate::grid::Grid;
+use bevy::window::PrimaryWindow;
+use crate::components::{ChunkDirty, OreDrop, Player, TerrainChunk, Velocity};
+use crate::dig::{self, DigStatus};
+use crate::grid::{Grid, OreType};
+use crate::systems::chunk_lifecycle::CHUNK_TILES;
 use crate::systems::setup::TILE_SIZE_PX;
+
+#[derive(Resource)]
+pub struct DigCooldown(pub Timer);
+
+impl Default for DigCooldown {
+    fn default() -> Self {
+        Self(Timer::from_seconds(0.15, TimerMode::Once))
+    }
+}
+
+pub const DIG_REACH_TILES: f32 = 2.0;
 
 pub const PLAYER_SPEED_PX_PER_S: f32 = 120.0;
 pub const PLAYER_HALF: f32 = 6.0; // 12px sprite
@@ -83,5 +97,72 @@ pub fn collide_player_with_grid_system(
                 }
             }
         }
+    }
+}
+
+pub fn dig_input_system(
+    mut commands: Commands,
+    mouse: Res<ButtonInput<MouseButton>>,
+    win_q: Query<&Window, With<PrimaryWindow>>,
+    cam_q: Query<(&Camera, &GlobalTransform), With<crate::components::MainCamera>>,
+    player_q: Query<&Transform, With<Player>>,
+    mut grid: ResMut<Grid>,
+    mut cooldown: ResMut<DigCooldown>,
+    chunks_q: Query<(Entity, &TerrainChunk)>,
+    time: Res<Time>,
+) {
+    cooldown.0.tick(time.delta());
+    if !mouse.pressed(MouseButton::Left) { return; }
+    if !cooldown.0.finished() { return; }
+
+    let Ok(win) = win_q.get_single() else { return };
+    let Some(cursor_screen) = win.cursor_position() else { return };
+    let Ok((cam, cam_xf)) = cam_q.get_single() else { return };
+    let Ok(player_xf) = player_q.get_single() else { return };
+
+    let Ok(cursor_world) = cam.viewport_to_world_2d(cam_xf, cursor_screen) else { return };
+
+    let tx = (cursor_world.x / TILE_SIZE_PX).floor() as i32;
+    let ty = ((-cursor_world.y) / TILE_SIZE_PX).floor() as i32;
+    let tile_center = Vec2::new(
+        tx as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0,
+        -(ty as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0),
+    );
+    let dist_tiles =
+        (tile_center - player_xf.translation.truncate()).length() / TILE_SIZE_PX;
+    if dist_tiles > DIG_REACH_TILES { return; }
+
+    let result = dig::try_dig(&mut grid, tx, ty);
+    if result.status != DigStatus::Ok { return; }
+    // Cooldown gates only successful swings — failed clicks (out of reach,
+    // bedrock) shouldn't punish the player by stalling their next attempt.
+    cooldown.0.reset();
+
+    // mark owning chunk dirty
+    let chunk_coord = IVec2::new(tx.div_euclid(CHUNK_TILES), ty.div_euclid(CHUNK_TILES));
+    for (e, c) in chunks_q.iter() {
+        if c.coord == chunk_coord {
+            commands.entity(e).insert(ChunkDirty);
+            break;
+        }
+    }
+
+    // spawn ore drop
+    if result.ore != OreType::None {
+        let color = match result.ore {
+            OreType::Copper => Color::srgb(0.85, 0.45, 0.20),
+            OreType::Silver => Color::srgb(0.85, 0.85, 0.92),
+            OreType::Gold   => Color::srgb(0.95, 0.78, 0.25),
+            OreType::None   => Color::WHITE,
+        };
+        commands.spawn((
+            OreDrop { ore: result.ore },
+            Sprite {
+                color,
+                custom_size: Some(Vec2::splat(6.0)),
+                ..default()
+            },
+            Transform::from_translation(tile_center.extend(5.0)),
+        ));
     }
 }
