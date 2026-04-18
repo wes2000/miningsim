@@ -156,8 +156,8 @@ pub fn dig_input_system(
         probe += step;
     }
 
-    let result = dig::try_dig(&mut grid, tx, ty);
-    if result.status != DigStatus::Ok { return; }
+    let result = dig::try_dig(&mut grid, bevy::prelude::IVec2::new(tx, ty), crate::tools::Tool::Shovel);
+    if result.status != DigStatus::Broken { return; }
     // Cooldown gates only successful swings — failed clicks (out of reach,
     // bedrock) shouldn't punish the player by stalling their next attempt.
     cooldown.0.reset();
