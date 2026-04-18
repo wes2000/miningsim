@@ -68,6 +68,17 @@ pub fn chunk_remesh_system(
                             Transform::from_translation(Vec3::new(world_x, world_y, 0.5)),
                         ));
                     }
+
+                    if t.damage > 0 {
+                        parent.spawn((
+                            Sprite {
+                                color: Color::srgba(0.0, 0.0, 0.0, t.damage as f32 * 0.2),
+                                custom_size: Some(Vec2::splat(TILE_SIZE_PX)),
+                                ..default()
+                            },
+                            Transform::from_translation(Vec3::new(world_x, world_y, 0.25)),
+                        ));
+                    }
                 }
             }
         });
