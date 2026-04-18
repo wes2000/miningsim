@@ -99,7 +99,12 @@ pub fn collide_player_with_grid_system(
                 let overlap_x = (max.x.min(tw_max.x)) - (min.x.max(tw_min.x));
                 let overlap_y = (max.y.min(tw_max.y)) - (min.y.max(tw_min.y));
                 if overlap_x <= 0.0 || overlap_y <= 0.0 { continue }
+                // Resolve along the AXIS WITH THE SMALLER OVERLAP (minimum
+                // translation vector). Without this guard, walking vertically
+                // into a wall would also push horizontally by the player's
+                // full width, which felt like sideways bounce-back.
                 if axis == 0 {
+                    if overlap_x > overlap_y { continue; }
                     // push out along X
                     if t.translation.x < (tw_min.x + tw_max.x) * 0.5 {
                         t.translation.x -= overlap_x;
@@ -107,6 +112,7 @@ pub fn collide_player_with_grid_system(
                         t.translation.x += overlap_x;
                     }
                 } else {
+                    if overlap_y > overlap_x { continue; }
                     if t.translation.y < (tw_min.y + tw_max.y) * 0.5 {
                         t.translation.y -= overlap_y;
                     } else {
