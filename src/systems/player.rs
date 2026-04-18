@@ -130,9 +130,20 @@ pub fn dig_input_system(
         tx as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0,
         -(ty as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0),
     );
-    let dist_tiles =
-        (tile_center - player_xf.translation.truncate()).length() / TILE_SIZE_PX;
-    if dist_tiles > DIG_REACH_TILES { return; }
+
+    // Cardinal-only dig: the target tile must be directly N/E/S/W of the
+    // player's tile, within reach. Diagonal clicks are rejected — they
+    // produced visually-messy diagonal tunnels that the player could get
+    // wedged on.
+    let player_tile = IVec2::new(
+        (player_xf.translation.x / TILE_SIZE_PX).floor() as i32,
+        ((-player_xf.translation.y) / TILE_SIZE_PX).floor() as i32,
+    );
+    let delta = IVec2::new(tx, ty) - player_tile;
+    let reach = DIG_REACH_TILES as i32;
+    let is_cardinal = (delta.x == 0) ^ (delta.y == 0);
+    let within_reach = delta.x.abs() <= reach && delta.y.abs() <= reach;
+    if !is_cardinal || !within_reach { return; }
 
     let result = dig::try_dig(&mut grid, tx, ty);
     if result.status != DigStatus::Ok { return; }
