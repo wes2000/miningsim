@@ -29,13 +29,24 @@ solo.
 
 ## Target Platform & Tech
 
-- **Engine:** Godot (version TBD at milestone 1 brainstorm — likely 4.x).
-- **Language:** GDScript by default; C# or GDExtension only if profiling
-  proves it necessary.
+- **Engine:** [Bevy](https://bevyengine.org/) — code-first ECS engine. Plan
+  authored against Bevy 0.15.x; engineer adapts to current stable.
+- **Language:** Rust.
 - **Perspective:** Top-down 2D.
+- **Why this stack:** 100% code-driven (no GUI editor in the loop), strong
+  type system catches a class of bugs at compile time, ECS is a natural
+  model for the factory/conveyor systems coming in milestone 5, and the
+  Bevy networking ecosystem (`bevy_replicon`, `lightyear`) is built around
+  replicated game state — well-aligned with milestone 4.
+- **Collision:** DIY tile-grid AABB checks for milestone 1 (no physics
+  crate). A heavier physics dependency can be introduced later if a
+  specific milestone needs it.
+- **Tilemap & marching squares:** custom — written against the explicit
+  Grid data structure rather than relying on a community crate, since the
+  Grid is load-bearing for save/load and netcode later.
 - **Networking target:** Up to 4 players, co-op only (no adversarial).
-  Specific netcode model (authoritative host vs. deterministic lockstep vs.
-  ENet high-level multiplayer) to be decided in milestone 4's brainstorm.
+  Specific netcode crate (`bevy_replicon` is the leading candidate) and
+  authority model decided in milestone 4's brainstorm.
 
 ## Milestone Sequence
 
