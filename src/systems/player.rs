@@ -139,11 +139,22 @@ pub fn dig_input_system(
         (player_xf.translation.x / TILE_SIZE_PX).floor() as i32,
         ((-player_xf.translation.y) / TILE_SIZE_PX).floor() as i32,
     );
-    let delta = IVec2::new(tx, ty) - player_tile;
+    let target_tile = IVec2::new(tx, ty);
+    let delta = target_tile - player_tile;
     let reach = DIG_REACH_TILES as i32;
     let is_cardinal = (delta.x == 0) ^ (delta.y == 0);
     let within_reach = delta.x.abs() <= reach && delta.y.abs() <= reach;
     if !is_cardinal || !within_reach { return; }
+
+    // Block mining through walls: every tile BETWEEN the player and the
+    // target must already be non-solid. Without this, reach=2 lets you
+    // pick tiles behind the adjacent wall.
+    let step = IVec2::new(delta.x.signum(), delta.y.signum());
+    let mut probe = player_tile + step;
+    while probe != target_tile {
+        if grid.get(probe.x, probe.y).map_or(false, |t| t.solid) { return; }
+        probe += step;
+    }
 
     let result = dig::try_dig(&mut grid, tx, ty);
     if result.status != DigStatus::Ok { return; }
