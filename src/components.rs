@@ -8,6 +8,17 @@ pub struct Player;
 #[derive(Component, Default)]
 pub struct Velocity(pub Vec2);
 
+/// Cardinal facing direction in TILE-space (positive y = deeper underground,
+/// matching the grid convention, NOT Bevy's world Y).
+/// One of (1,0), (-1,0), (0,1), (0,-1). Used by spacebar-dig to pick a
+/// target tile relative to the player.
+#[derive(Component)]
+pub struct Facing(pub IVec2);
+
+impl Default for Facing {
+    fn default() -> Self { Self(IVec2::new(0, 1)) }   // down / deeper
+}
+
 #[derive(Component)]
 pub struct TerrainChunk {
     pub coord: IVec2,

@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::components::{MainCamera, Player, Shop, ShopUiOpen, Velocity};
+use crate::components::{Facing, MainCamera, Player, Shop, ShopUiOpen, Velocity};
 use crate::economy::Money;
 use crate::inventory::Inventory;
 use crate::terrain_gen;
@@ -27,6 +27,7 @@ pub fn setup_world(mut commands: Commands) {
     commands.spawn((
         Player,
         Velocity::default(),
+        Facing::default(),
         Sprite {
             color: Color::srgb(0.30, 0.60, 0.90),
             custom_size: Some(Vec2::splat(12.0)),
