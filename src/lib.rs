@@ -1,6 +1,7 @@
 pub mod app;
 pub mod components;
 pub mod dig;
+pub mod economy;
 pub mod grid;
 pub mod inventory;
 pub mod systems;
