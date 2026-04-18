@@ -23,8 +23,13 @@ pub fn chunk_lifecycle_system(
     let world_min = cam_pos - half;
     let world_max = cam_pos + half;
 
-    let chunk_min = world_to_chunk(world_min) - IVec2::splat(CHUNK_MARGIN);
-    let chunk_max = world_to_chunk(world_max) + IVec2::splat(CHUNK_MARGIN);
+    // Y inverts between world (up-positive) and grid (down-positive), so
+    // `world_min` / `world_max` map to chunk-space corners that are NOT
+    // componentwise min/max. Normalize after mapping.
+    let c_a = world_to_chunk(world_min);
+    let c_b = world_to_chunk(world_max);
+    let chunk_min = c_a.min(c_b) - IVec2::splat(CHUNK_MARGIN);
+    let chunk_max = c_a.max(c_b) + IVec2::splat(CHUNK_MARGIN);
 
     let mut want = std::collections::HashSet::new();
     for cy in chunk_min.y..=chunk_max.y {
