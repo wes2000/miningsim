@@ -45,7 +45,7 @@ pub fn generate(width: u32, height: u32, seed: u64) -> Grid {
                 tile.layer = Layer::Deep;
                 maybe_assign_ore(&mut tile, &mut rng);
             } else {
-                tile.layer = Layer::Bedrock;
+                tile.layer = Layer::Core;
             }
             g.set(x, y, tile);
         }
