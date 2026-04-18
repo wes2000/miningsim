@@ -1,23 +1,24 @@
-# Milestone 1 — Core Dig Prototype Implementation Plan
+# Milestone 1 — Core Dig Prototype Implementation Plan (Bevy)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Spec:** [../specs/2026-04-18-milestone-1-core-dig-prototype-design.md](../specs/2026-04-18-milestone-1-core-dig-prototype-design.md)
 
-**Goal:** Build a single-player Godot 4 prototype where a player digs through procedurally generated, depth-banded, smooth-contoured 2D terrain, breaking tiles, picking up ore drops, and watching them stack in a HUD inventory — to answer "is digging fun?"
+**Goal:** Build a single-player Bevy 2D prototype where a player digs through procedurally generated, depth-banded, smooth-contoured 2D terrain, breaking tiles, picking up ore drops, and watching them stack in a HUD inventory — to answer "is digging fun?"
 
-**Architecture:** A Godot 4 project organized into a pure data layer (Grid, TerrainGen, Inventory — fully unit-testable headlessly via GUT), a Godot-facing terrain wrapper that owns dig API and chunk lifecycle, and visual layers (chunk renderers using marching squares, player controller, ore drops, HUD). Strict downward dependency flow; the Grid is the single source of truth for terrain.
+**Architecture:** Bevy ECS app. The `Grid` resource is the single source of truth for terrain. Pure modules (`grid`, `terrain_gen`, `inventory`, `dig`, `marching_squares`) are unit-tested with `cargo test` and have no Bevy dependencies (except where a mesh/IVec2 type is unavoidable). Bevy systems wrap these pure modules to integrate with input, rendering, and HUD. Strict downward dependency flow.
 
-**Tech Stack:** Godot 4.3+ (latest stable), GDScript, [GUT](https://github.com/bitwes/Gut) (Godot Unit Testing) for headless tests, Git for version control.
+**Tech Stack:** Rust (stable), Bevy 0.15.x, `glam` (transitively via Bevy), `rand` for procgen, built-in `cargo test`.
 
 ---
 
 ## Pre-flight: environment expectations
 
 This plan assumes:
-- **Godot 4.3 or later** is installed and the CLI is reachable. On Windows, the CLI may be the same `.exe` you launch the editor with. Set `GODOT` env var or alias to the absolute path, e.g. `export GODOT="/c/Program Files/Godot/Godot_v4.3-stable_win64.exe"`. All test commands in this plan use `"$GODOT"`.
-- **bash shell** (the project's working environment is Git Bash on Windows; commands use Unix-style paths and forward slashes).
-- Working directory: `c:/Users/whann/Desktop/Games/miningsim` (the existing git repo, branch `main`).
+- **Rust toolchain (stable)** installed and `cargo` reachable. Verify with `cargo --version`. Plan was written for `rustc 1.80+`.
+- **Linker / build essentials** — On Windows, MSVC build tools (Visual Studio Build Tools "Desktop development with C++"). On Linux, `pkg-config`, `libudev-dev`, `libasound2-dev`, etc., per Bevy's [Linux dependencies](https://bevyengine.org/learn/quick-start/getting-started/setup/#installing-os-dependencies).
+- **bash shell** (Git Bash on Windows). Commands use Unix-style paths and forward slashes.
+- Working directory: `c:/Users/whann/Desktop/Games/miningsim` (existing git repo, branch `milestone-1`).
 - Author identity: commits use `--author="wes2000 <whannasch@gmail.com>"`. Do not modify global git config.
 
 If any of these aren't true, stop and resolve before proceeding.
@@ -27,1332 +28,1703 @@ If any of these aren't true, stop and resolve before proceeding.
 ## File structure (target end state)
 
 ```
-project.godot                          # Godot 4 project file
-icon.svg                               # default project icon
-addons/gut/                            # GUT testing addon (vendored)
-scripts/
-  main.gd
-  terrain/
-    grid.gd
-    terrain_gen.gd
-    terrain.gd
-    terrain_chunk.gd
-  player/
-    player.gd
-  items/
-    ore_drop.gd
-    inventory.gd
-  hud/
-    inventory_panel.gd
-scenes/
-  main.tscn
-  player.tscn
-  ore_drop.tscn
-  hud/inventory_panel.tscn
+Cargo.toml
+.gitignore                    # already exists; will extend with /target
+src/
+  main.rs
+  lib.rs
+  app.rs
+  grid.rs
+  terrain_gen.rs
+  inventory.rs
+  dig.rs
+  marching_squares.rs
+  components.rs
+  systems/
+    mod.rs
+    setup.rs
+    player.rs
+    camera.rs
+    chunk_lifecycle.rs
+    chunk_render.rs
+    ore_drop.rs
+    hud.rs
 tests/
-  unit/
-    test_grid.gd
-    test_inventory.gd
-    test_terrain_gen.gd
-    test_terrain_dig.gd
-  manual/
-    dig_sandbox.tscn
-    dig_sandbox.gd
-docs/                                  # already exists
-.gitignore                             # already exists; will extend
+  grid.rs
+  terrain_gen.rs
+  inventory.rs
+  dig.rs
+docs/                          # already exists
 ```
 
-Each script holds one responsibility. Pure data files (`grid.gd`, `terrain_gen.gd`, `inventory.gd`) have no Godot node dependencies and are unit-tested. Visual files are smoke-tested manually via the sandbox or `main.tscn`.
+Each pure module has in-file `#[cfg(test)] mod tests {}` AND a sibling
+integration test in `tests/` exercising the public API. Bevy systems are
+not unit-tested directly; they are exercised by manual smoke tests and
+final playtest.
 
 ---
 
 ## Conventions used in this plan
 
-- **Commit style:** present-tense imperative, short subject; co-author trailer is optional for solo work but the user previously asked for it. Use the same `--author` flag every commit.
-- **Test runs** assume `"$GODOT" --headless --path . -s addons/gut/gut_cmdln.gd -gtest=res://tests/unit/<file>.gd -gexit` (full headless GUT). Substitute `<file>` per task.
-- **TDD discipline:** for every pure-data module, write a failing test first, watch it fail, then implement the minimum to pass, then commit. For visual/integration code, replace "test" with "smoke test in the editor" and document what to look for.
+- **Commit style:** present-tense imperative, short subject. Use the same `--author` flag every commit.
+- **Test runs:** `cargo test --lib --tests` runs both in-file and integration tests for the library crate.
+- **TDD discipline for pure modules:** write a failing test first, watch it fail (`cargo test <name>` reports failures), implement the minimum to pass, then commit. For Bevy systems (which require a windowed app to verify), replace "test" with "smoke test by running the binary" and document what to look for.
+- **Bevy version assumption:** **0.15.x**. APIs have shifted across recent Bevy releases; if `cargo` resolves a different minor version, expect minor naming differences (`Sprite`/`SpriteBundle`, `Color::srgb`/`Color::rgb`, etc.). Adapt to current API; the algorithm and data flow remain valid.
 
 ---
 
-## Task 1: Initialize the Godot project
+## Task 1: Initialize the Cargo project & add Bevy
 
 **Files:**
-- Create: `project.godot`
-- Create: `icon.svg`
-- Modify: `.gitignore` (extend with Godot-specific entries — already present from earlier commit)
+- Create: `Cargo.toml`
+- Create: `src/main.rs`, `src/lib.rs`
+- Modify: `.gitignore` (add `/target`)
 
-- [ ] **Step 1: Create the Godot project via the editor or CLI**
-
-Open the Godot editor, choose "Import" → point to `c:/Users/whann/Desktop/Games/miningsim`, name the project "MiningSim", renderer: **Forward+** (or **Compatibility** for older hardware — either works for 2D), language: GDScript. Let Godot create `project.godot` and `icon.svg`.
-
-Or via CLI from a fresh clone:
-```bash
-"$GODOT" --headless --path . --quit-after 1
-```
-(This won't create the project from scratch — easier to do via the editor on first run.)
-
-- [ ] **Step 2: Configure the project for 2D**
-
-In the editor: Project → Project Settings → Display → Window → set Viewport Width=1280, Height=720, Stretch Mode=`canvas_items`, Aspect=`keep`. Save and close.
-
-- [ ] **Step 3: Verify .gitignore covers Godot artifacts**
-
-Confirm `.gitignore` contains at least:
-```
-.godot/
-*.import
-export.cfg
-export_presets.cfg
-```
-(Already added in the planning commit.)
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 1: Verify Rust toolchain**
 
 ```bash
 cd "c:/Users/whann/Desktop/Games/miningsim"
-git add project.godot icon.svg icon.svg.import 2>/dev/null || git add project.godot icon.svg
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Initialize Godot 4 project"
+cargo --version
+rustc --version
+```
+Expected: cargo 1.80 or later, rustc 1.80 or later. If absent, install via https://rustup.rs/ before proceeding.
+
+- [ ] **Step 2: Initialize Cargo crate in the existing directory**
+
+```bash
+cargo init --name miningsim --vcs none --bin
 ```
 
-(`.import` files generated by Godot for icon import should also be staged.)
+`--vcs none` because the git repo already exists. `--bin` because we'll add `lib.rs` ourselves for tests.
+
+- [ ] **Step 3: Add `/target` to .gitignore**
+
+Append to `.gitignore`:
+```
+/target
+Cargo.lock
+```
+(Yes, `Cargo.lock` is gitignored for libraries, but per Bevy convention, since this is a binary, the standard advice is to commit it. We'll commit it. Remove the `Cargo.lock` line if you prefer the binary convention — but starting without it keeps merge conflicts down during early prototyping.)
+
+Decision for this plan: **gitignore `Cargo.lock`** during prototyping; revisit before milestone 4 (when reproducible netcode benefits from a locked dep tree).
+
+- [ ] **Step 4: Replace generated `src/main.rs` and add `src/lib.rs`**
+
+Replace `src/main.rs`:
+```rust
+use bevy::prelude::*;
+use miningsim::app::MiningSimPlugin;
+
+fn main() {
+    App::new()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "MiningSim — Milestone 1".into(),
+                resolution: (1280., 720.).into(),
+                ..default()
+            }),
+            ..default()
+        }))
+        .add_plugins(MiningSimPlugin)
+        .run();
+}
+```
+
+Create `src/lib.rs`:
+```rust
+pub mod app;
+pub mod components;
+pub mod dig;
+pub mod grid;
+pub mod inventory;
+pub mod marching_squares;
+pub mod systems;
+pub mod terrain_gen;
+```
+
+(Some of these modules don't exist yet. They'll be added in subsequent tasks. The compiler will error here until they exist — that's expected; we add them as we go. To avoid that during Task 1, create empty stub files in Step 5.)
+
+- [ ] **Step 5: Add stub modules so the crate compiles**
+
+```bash
+mkdir -p src/systems
+touch src/grid.rs src/terrain_gen.rs src/inventory.rs src/dig.rs src/marching_squares.rs src/components.rs src/app.rs src/systems/mod.rs
+```
+
+In each stub, write the minimum to make the crate compile:
+
+`src/grid.rs`, `src/terrain_gen.rs`, `src/inventory.rs`, `src/dig.rs`, `src/marching_squares.rs`, `src/components.rs`, `src/systems/mod.rs`: leave empty.
+
+`src/app.rs`:
+```rust
+use bevy::prelude::*;
+
+pub struct MiningSimPlugin;
+
+impl Plugin for MiningSimPlugin {
+    fn build(&self, _app: &mut App) {
+        // systems added in later tasks
+    }
+}
+```
+
+- [ ] **Step 6: Replace `Cargo.toml` with explicit Bevy dependency**
+
+Overwrite `Cargo.toml`:
+```toml
+[package]
+name = "miningsim"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.15"
+rand = "0.8"
+
+[profile.dev]
+opt-level = 1            # Bevy is much faster with some opt even in dev
+
+[profile.dev.package."*"]
+opt-level = 3            # Crank deps to release; only the local crate stays at -O1
+```
+
+The dev-profile tweaks are the standard Bevy guidance — without them, dev iteration on a Bevy app is painfully slow.
+
+- [ ] **Step 7: Build & run**
+
+```bash
+cargo build
+cargo run
+```
+
+Expected on first build: a long compile (Bevy + dependencies, several minutes). Then a window opens with a black screen titled "MiningSim — Milestone 1." Close it.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add Cargo.toml .gitignore src/
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Initialize Bevy crate with empty MiningSimPlugin and stub modules"
+```
 
 ---
 
-## Task 2: Vendor the GUT testing addon
+## Task 2: Grid module (pure data) — TDD
 
 **Files:**
-- Create: `addons/gut/` (downloaded)
-- Modify: `project.godot` (enable plugin)
+- Modify: `src/grid.rs`
+- Create: `tests/grid.rs`
 
-- [ ] **Step 1: Download GUT 9.x**
+- [ ] **Step 1: Write failing tests in `tests/grid.rs`**
 
-Download the latest GUT 9.x release zip from https://github.com/bitwes/Gut/releases and extract its `addons/gut/` directory into `c:/Users/whann/Desktop/Games/miningsim/addons/gut/`.
+```rust
+use miningsim::grid::{Grid, Layer, OreType, Tile};
 
-- [ ] **Step 2: Enable the plugin**
+#[test]
+fn new_grid_has_requested_dimensions() {
+    let g = Grid::new(10, 20);
+    assert_eq!(g.width(), 10);
+    assert_eq!(g.height(), 20);
+}
 
-Open the editor → Project → Project Settings → Plugins → enable "Gut". This writes a `[editor_plugins]` section into `project.godot`.
+#[test]
+fn new_grid_default_tiles_are_solid_dirt_no_ore() {
+    let g = Grid::new(3, 3);
+    let t = g.get(1, 1).expect("in bounds");
+    assert!(t.solid);
+    assert_eq!(t.layer, Layer::Dirt);
+    assert_eq!(t.ore, OreType::None);
+}
 
-- [ ] **Step 3: Verify the headless test runner works**
+#[test]
+fn set_and_get_round_trip() {
+    let mut g = Grid::new(3, 3);
+    g.set(1, 1, Tile { solid: false, layer: Layer::Stone, ore: OreType::Silver });
+    let t = g.get(1, 1).unwrap();
+    assert!(!t.solid);
+    assert_eq!(t.layer, Layer::Stone);
+    assert_eq!(t.ore, OreType::Silver);
+}
 
-Create an empty placeholder test file `tests/unit/test_smoke.gd`:
+#[test]
+fn in_bounds_check() {
+    let g = Grid::new(5, 5);
+    assert!(g.in_bounds(0, 0));
+    assert!(g.in_bounds(4, 4));
+    assert!(!g.in_bounds(-1, 0));
+    assert!(!g.in_bounds(0, -1));
+    assert!(!g.in_bounds(5, 0));
+    assert!(!g.in_bounds(0, 5));
+}
 
-```gdscript
-extends GutTest
+#[test]
+fn get_out_of_bounds_returns_none() {
+    let g = Grid::new(3, 3);
+    assert!(g.get(-1, 0).is_none());
+    assert!(g.get(3, 0).is_none());
+}
 
-func test_truth():
-    assert_true(true)
-```
-
-Run:
-```bash
-"$GODOT" --headless --path . -s res://addons/gut/gut_cmdln.gd -gdir=res://tests/unit -gexit
-```
-Expected: GUT runs, reports 1/1 passing, exits 0. If the runner can't find `gut_cmdln.gd`, double-check the addon path.
-
-- [ ] **Step 4: Delete the placeholder test**
-
-```bash
-rm tests/unit/test_smoke.gd
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add addons/ project.godot
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Add GUT testing addon and verify headless runner"
-```
-
----
-
-## Task 3: Grid (pure data layer) — TDD
-
-**Files:**
-- Create: `scripts/terrain/grid.gd`
-- Test: `tests/unit/test_grid.gd`
-
-- [ ] **Step 1: Write failing tests for Grid**
-
-Create `tests/unit/test_grid.gd`:
-
-```gdscript
-extends GutTest
-
-const Grid = preload("res://scripts/terrain/grid.gd")
-
-func test_new_grid_is_correct_size():
-    var g = Grid.new(10, 20)
-    assert_eq(g.width(), 10)
-    assert_eq(g.height(), 20)
-
-func test_new_grid_tiles_default_solid_dirt_no_ore():
-    var g = Grid.new(3, 3)
-    var t = g.get_tile(1, 1)
-    assert_true(t.solid)
-    assert_eq(t.layer, Grid.Layer.DIRT)
-    assert_eq(t.ore, Grid.Ore.NONE)
-
-func test_set_and_get_tile_round_trip():
-    var g = Grid.new(3, 3)
-    g.set_tile(1, 1, {"solid": false, "layer": Grid.Layer.STONE, "ore": Grid.Ore.SILVER})
-    var t = g.get_tile(1, 1)
-    assert_false(t.solid)
-    assert_eq(t.layer, Grid.Layer.STONE)
-    assert_eq(t.ore, Grid.Ore.SILVER)
-
-func test_in_bounds():
-    var g = Grid.new(5, 5)
-    assert_true(g.in_bounds(0, 0))
-    assert_true(g.in_bounds(4, 4))
-    assert_false(g.in_bounds(-1, 0))
-    assert_false(g.in_bounds(0, -1))
-    assert_false(g.in_bounds(5, 0))
-    assert_false(g.in_bounds(0, 5))
-
-func test_get_tile_out_of_bounds_returns_null():
-    var g = Grid.new(3, 3)
-    assert_null(g.get_tile(-1, 0))
-    assert_null(g.get_tile(3, 0))
+#[test]
+#[should_panic]
+fn set_out_of_bounds_panics() {
+    let mut g = Grid::new(3, 3);
+    g.set(5, 5, Tile { solid: true, layer: Layer::Dirt, ore: OreType::None });
+}
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-"$GODOT" --headless --path . -s res://addons/gut/gut_cmdln.gd -gtest=res://tests/unit/test_grid.gd -gexit
+cargo test --test grid
 ```
-Expected: 5 failing tests (script not found / methods missing).
+Expected: compile error (Grid not defined).
 
 - [ ] **Step 3: Implement Grid**
 
-Create `scripts/terrain/grid.gd`:
+Replace `src/grid.rs`:
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layer {
+    Dirt,
+    Stone,
+    Deep,
+    Bedrock,
+}
 
-```gdscript
-class_name Grid extends RefCounted
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OreType {
+    None,
+    Copper,
+    Silver,
+    Gold,
+}
 
-enum Layer { DIRT, STONE, DEEP, BEDROCK }
-enum Ore   { NONE, COPPER, SILVER, GOLD }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tile {
+    pub solid: bool,
+    pub layer: Layer,
+    pub ore: OreType,
+}
 
-var _w: int
-var _h: int
-var _tiles: Array  # Array of Dictionary
+impl Default for Tile {
+    fn default() -> Self {
+        Self { solid: true, layer: Layer::Dirt, ore: OreType::None }
+    }
+}
 
-func _init(w: int, h: int) -> void:
-    assert(w > 0 and h > 0, "Grid dimensions must be positive")
-    _w = w
-    _h = h
-    _tiles = []
-    _tiles.resize(w * h)
-    for i in range(_tiles.size()):
-        _tiles[i] = {"solid": true, "layer": Layer.DIRT, "ore": Ore.NONE}
+#[derive(Debug, bevy::prelude::Resource)]
+pub struct Grid {
+    width: u32,
+    height: u32,
+    tiles: Vec<Tile>,
+}
 
-func width() -> int: return _w
-func height() -> int: return _h
+impl Grid {
+    pub fn new(width: u32, height: u32) -> Self {
+        assert!(width > 0 && height > 0, "Grid dims must be positive");
+        let tiles = vec![Tile::default(); (width * height) as usize];
+        Self { width, height, tiles }
+    }
 
-func in_bounds(x: int, y: int) -> bool:
-    return x >= 0 and y >= 0 and x < _w and y < _h
+    pub fn width(&self) -> u32 { self.width }
+    pub fn height(&self) -> u32 { self.height }
 
-func get_tile(x: int, y: int):
-    if not in_bounds(x, y):
-        return null
-    return _tiles[y * _w + x]
+    pub fn in_bounds(&self, x: i32, y: i32) -> bool {
+        x >= 0 && y >= 0 && (x as u32) < self.width && (y as u32) < self.height
+    }
 
-func set_tile(x: int, y: int, tile: Dictionary) -> void:
-    assert(in_bounds(x, y), "set_tile out of bounds: %d,%d" % [x, y])
-    _tiles[y * _w + x] = tile
+    pub fn get(&self, x: i32, y: i32) -> Option<&Tile> {
+        if !self.in_bounds(x, y) { return None; }
+        Some(&self.tiles[self.idx(x, y)])
+    }
+
+    pub fn get_mut(&mut self, x: i32, y: i32) -> Option<&mut Tile> {
+        if !self.in_bounds(x, y) { return None; }
+        let i = self.idx(x, y);
+        Some(&mut self.tiles[i])
+    }
+
+    pub fn set(&mut self, x: i32, y: i32, t: Tile) {
+        assert!(self.in_bounds(x, y), "set out of bounds: {},{}", x, y);
+        let i = self.idx(x, y);
+        self.tiles[i] = t;
+    }
+
+    fn idx(&self, x: i32, y: i32) -> usize {
+        (y as usize) * (self.width as usize) + (x as usize)
+    }
+}
+```
+
+The `Resource` derive comes from Bevy — pulling Bevy in here keeps the Grid usable as a Bevy resource directly. This is a pragmatic compromise: it's an annotation only and the rest of the module is pure logic.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+```bash
+cargo test --test grid
+```
+Expected: 6/6 passing.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/grid.rs tests/grid.rs
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Add Grid data structure with unit tests"
+```
+
+---
+
+## Task 3: Inventory module (pure data) — TDD
+
+**Files:**
+- Modify: `src/inventory.rs`
+- Create: `tests/inventory.rs`
+
+- [ ] **Step 1: Write failing tests in `tests/inventory.rs`**
+
+```rust
+use miningsim::grid::OreType;
+use miningsim::inventory::Inventory;
+
+#[test]
+fn empty_inventory_returns_zero() {
+    let inv = Inventory::default();
+    assert_eq!(inv.get(OreType::Copper), 0);
+}
+
+#[test]
+fn add_increments_count() {
+    let mut inv = Inventory::default();
+    inv.add(OreType::Copper, 3);
+    assert_eq!(inv.get(OreType::Copper), 3);
+    inv.add(OreType::Copper, 2);
+    assert_eq!(inv.get(OreType::Copper), 5);
+}
+
+#[test]
+fn remove_decrements_count_floored_at_zero() {
+    let mut inv = Inventory::default();
+    inv.add(OreType::Silver, 5);
+    inv.remove(OreType::Silver, 2);
+    assert_eq!(inv.get(OreType::Silver), 3);
+    inv.remove(OreType::Silver, 100);
+    assert_eq!(inv.get(OreType::Silver), 0);
+}
+
+#[test]
+fn add_one_ore_does_not_affect_others() {
+    let mut inv = Inventory::default();
+    inv.add(OreType::Gold, 1);
+    assert_eq!(inv.get(OreType::Copper), 0);
+    assert_eq!(inv.get(OreType::Silver), 0);
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+cargo test --test inventory
+```
+Expected: compile error.
+
+- [ ] **Step 3: Implement Inventory**
+
+Replace `src/inventory.rs`:
+```rust
+use std::collections::HashMap;
+use crate::grid::OreType;
+
+#[derive(Debug, Default, bevy::prelude::Resource)]
+pub struct Inventory {
+    counts: HashMap<OreType, u32>,
+}
+
+impl Inventory {
+    pub fn add(&mut self, ore: OreType, n: u32) {
+        if ore == OreType::None { return; }
+        *self.counts.entry(ore).or_insert(0) += n;
+    }
+
+    pub fn remove(&mut self, ore: OreType, n: u32) {
+        let c = self.counts.entry(ore).or_insert(0);
+        *c = c.saturating_sub(n);
+    }
+
+    pub fn get(&self, ore: OreType) -> u32 {
+        *self.counts.get(&ore).unwrap_or(&0)
+    }
+}
+```
+
+`OreType` needs `Hash` for `HashMap` keys. Update `src/grid.rs`:
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OreType { ... }
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 ```bash
-"$GODOT" --headless --path . -s res://addons/gut/gut_cmdln.gd -gtest=res://tests/unit/test_grid.gd -gexit
+cargo test --test inventory
+```
+Expected: 4/4 passing.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/inventory.rs src/grid.rs tests/inventory.rs
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Add Inventory resource with add/remove/get and unit tests"
+```
+
+---
+
+## Task 4: TerrainGen module (pure functions) — TDD
+
+**Files:**
+- Modify: `src/terrain_gen.rs`
+- Create: `tests/terrain_gen.rs`
+
+- [ ] **Step 1: Write failing tests in `tests/terrain_gen.rs`**
+
+```rust
+use miningsim::grid::{Grid, Layer, OreType};
+use miningsim::terrain_gen;
+
+#[test]
+fn generated_grid_has_requested_dimensions() {
+    let g = terrain_gen::generate(80, 200, 12345);
+    assert_eq!(g.width(), 80);
+    assert_eq!(g.height(), 200);
+}
+
+#[test]
+fn outermost_ring_is_bedrock() {
+    let g = terrain_gen::generate(40, 60, 1);
+    for x in 0..g.width() as i32 {
+        assert_eq!(g.get(x, 0).unwrap().layer, Layer::Bedrock);
+        assert_eq!(g.get(x, g.height() as i32 - 1).unwrap().layer, Layer::Bedrock);
+    }
+    for y in 0..g.height() as i32 {
+        assert_eq!(g.get(0, y).unwrap().layer, Layer::Bedrock);
+        assert_eq!(g.get(g.width() as i32 - 1, y).unwrap().layer, Layer::Bedrock);
+    }
+}
+
+#[test]
+fn surface_strip_is_walkable() {
+    let g = terrain_gen::generate(40, 60, 1);
+    for y in 1..=3i32 {
+        for x in 1..(g.width() as i32 - 1) {
+            assert!(!g.get(x, y).unwrap().solid, "surface tile {},{} should be non-solid", x, y);
+        }
+    }
+}
+
+#[test]
+fn depth_layers_appear_in_order() {
+    let g = terrain_gen::generate(40, 200, 1);
+    assert_eq!(g.get(20, 10).unwrap().layer, Layer::Dirt);
+    assert_eq!(g.get(20, 80).unwrap().layer, Layer::Stone);
+    assert_eq!(g.get(20, 160).unwrap().layer, Layer::Deep);
+}
+
+#[test]
+fn spawn_pocket_is_carved() {
+    let g = terrain_gen::generate(40, 200, 1);
+    let sp = terrain_gen::spawn_tile(&g);
+    for dy in -1..=1i32 {
+        for dx in -1..=1i32 {
+            let t = g.get(sp.0 + dx, sp.1 + dy).unwrap();
+            assert!(!t.solid, "spawn pocket tile ({},{}) should be non-solid",
+                    sp.0 + dx, sp.1 + dy);
+        }
+    }
+    let floor_t = g.get(sp.0, sp.1 + 2).unwrap();
+    assert!(floor_t.solid);
+    assert_eq!(floor_t.ore, OreType::None);
+}
+
+#[test]
+fn deterministic_for_same_seed() {
+    let a = terrain_gen::generate(40, 60, 42);
+    let b = terrain_gen::generate(40, 60, 42);
+    for y in 0..a.height() as i32 {
+        for x in 0..a.width() as i32 {
+            assert_eq!(a.get(x, y), b.get(x, y), "tile {},{} mismatch", x, y);
+        }
+    }
+}
+
+#[test]
+fn ore_distribution_in_tolerance() {
+    let g = terrain_gen::generate(80, 200, 7);
+    let mut copper = 0;
+    let mut silver = 0;
+    let mut gold = 0;
+    for y in 0..g.height() as i32 {
+        for x in 0..g.width() as i32 {
+            match g.get(x, y).unwrap().ore {
+                OreType::Copper => copper += 1,
+                OreType::Silver => silver += 1,
+                OreType::Gold => gold += 1,
+                OreType::None => {}
+            }
+        }
+    }
+    // Loose existence + relative-ordering assertions, kept brittle-resistant
+    // to ore-prob tuning. We assert each ore exists at all and that copper
+    // (most common in dirt) outnumbers gold (only generated in deep).
+    assert!(copper > 0, "expected some copper");
+    assert!(silver > 0, "expected some silver");
+    assert!(gold > 0,   "expected some gold");
+    assert!(copper > gold, "copper should be more common than gold ({} vs {})", copper, gold);
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+cargo test --test terrain_gen
+```
+Expected: compile error.
+
+- [ ] **Step 3: Implement TerrainGen**
+
+Replace `src/terrain_gen.rs`:
+```rust
+use rand::{Rng, SeedableRng};
+use rand::rngs::StdRng;
+
+use crate::grid::{Grid, Layer, OreType, Tile};
+
+const SURFACE_ROWS: i32 = 3;
+const DIRT_FRAC: f32 = 0.30;
+const STONE_FRAC: f32 = 0.40;
+const DEEP_FRAC: f32 = 0.27;
+
+fn ore_probs(layer: Layer) -> [(OreType, f32); 3] {
+    match layer {
+        Layer::Dirt  => [(OreType::Copper, 0.04),  (OreType::Silver, 0.005), (OreType::Gold, 0.0)],
+        Layer::Stone => [(OreType::Copper, 0.02),  (OreType::Silver, 0.025), (OreType::Gold, 0.003)],
+        Layer::Deep  => [(OreType::Copper, 0.005), (OreType::Silver, 0.015), (OreType::Gold, 0.02)],
+        Layer::Bedrock => [(OreType::None, 0.0); 3],
+    }
+}
+
+pub fn generate(width: u32, height: u32, seed: u64) -> Grid {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut g = Grid::new(width, height);
+
+    let interior_h = (height as i32) - 2 - SURFACE_ROWS;
+    let dirt_end  = 1 + SURFACE_ROWS + (interior_h as f32 * DIRT_FRAC) as i32;
+    let stone_end = dirt_end + (interior_h as f32 * STONE_FRAC) as i32;
+    let deep_end  = stone_end + (interior_h as f32 * DEEP_FRAC) as i32;
+
+    for y in 0..(height as i32) {
+        for x in 0..(width as i32) {
+            let mut tile = Tile::default();
+            if x == 0 || y == 0 || x == width as i32 - 1 || y == height as i32 - 1 {
+                tile.layer = Layer::Bedrock;
+            } else if y <= SURFACE_ROWS {
+                tile.solid = false;
+                tile.layer = Layer::Dirt;
+            } else if y < dirt_end {
+                tile.layer = Layer::Dirt;
+                maybe_assign_ore(&mut tile, &mut rng);
+            } else if y < stone_end {
+                tile.layer = Layer::Stone;
+                maybe_assign_ore(&mut tile, &mut rng);
+            } else if y < deep_end {
+                tile.layer = Layer::Deep;
+                maybe_assign_ore(&mut tile, &mut rng);
+            } else {
+                tile.layer = Layer::Bedrock;
+            }
+            g.set(x, y, tile);
+        }
+    }
+
+    carve_spawn_pocket(&mut g);
+    g
+}
+
+pub fn spawn_tile(g: &Grid) -> (i32, i32) {
+    ((g.width() / 2) as i32, SURFACE_ROWS + 1)
+}
+
+fn maybe_assign_ore(tile: &mut Tile, rng: &mut StdRng) {
+    let probs = ore_probs(tile.layer);
+    let r: f32 = rng.gen();
+    let mut acc = 0.0;
+    for (ore, p) in probs {
+        acc += p;
+        if r < acc {
+            tile.ore = ore;
+            return;
+        }
+    }
+}
+
+fn carve_spawn_pocket(g: &mut Grid) {
+    let sp = spawn_tile(g);
+    for dy in -1..=1i32 {
+        for dx in -1..=1i32 {
+            if let Some(t) = g.get_mut(sp.0 + dx, sp.1 + dy) {
+                t.solid = false;
+                t.ore = OreType::None;
+            }
+        }
+    }
+    if let Some(t) = g.get_mut(sp.0, sp.1 + 2) {
+        t.solid = true;
+        t.ore = OreType::None;
+    }
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+```bash
+cargo test --test terrain_gen
+```
+Expected: 7/7 passing.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/terrain_gen.rs tests/terrain_gen.rs
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Add deterministic TerrainGen with layer bands and ore distribution"
+```
+
+---
+
+## Task 5: Dig module (pure logic) — TDD
+
+**Files:**
+- Modify: `src/dig.rs`
+- Create: `tests/dig.rs`
+
+- [ ] **Step 1: Write failing tests in `tests/dig.rs`**
+
+```rust
+use miningsim::grid::{Grid, Layer, OreType, Tile};
+use miningsim::dig::{self, DigStatus};
+
+fn make_grid() -> Grid {
+    let mut g = Grid::new(10, 10);
+    g.set(3, 3, Tile { solid: true, layer: Layer::Dirt, ore: OreType::Copper });
+    g.set(0, 0, Tile { solid: true, layer: Layer::Bedrock, ore: OreType::None });
+    g
+}
+
+#[test]
+fn dig_solid_tile_returns_ok_with_ore() {
+    let mut g = make_grid();
+    let r = dig::try_dig(&mut g, 3, 3);
+    assert_eq!(r.status, DigStatus::Ok);
+    assert_eq!(r.ore, OreType::Copper);
+}
+
+#[test]
+fn dig_clears_tile() {
+    let mut g = make_grid();
+    dig::try_dig(&mut g, 3, 3);
+    assert!(!g.get(3, 3).unwrap().solid);
+}
+
+#[test]
+fn dig_out_of_bounds_returns_oob() {
+    let mut g = make_grid();
+    let r = dig::try_dig(&mut g, -1, 5);
+    assert_eq!(r.status, DigStatus::OutOfBounds);
+}
+
+#[test]
+fn dig_already_empty_returns_already_empty() {
+    let mut g = make_grid();
+    dig::try_dig(&mut g, 3, 3);
+    let r = dig::try_dig(&mut g, 3, 3);
+    assert_eq!(r.status, DigStatus::AlreadyEmpty);
+}
+
+#[test]
+fn dig_bedrock_returns_bedrock_and_keeps_solid() {
+    let mut g = make_grid();
+    let r = dig::try_dig(&mut g, 0, 0);
+    assert_eq!(r.status, DigStatus::Bedrock);
+    assert!(g.get(0, 0).unwrap().solid);
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+cargo test --test dig
+```
+Expected: compile error.
+
+- [ ] **Step 3: Implement Dig**
+
+Replace `src/dig.rs`:
+```rust
+use crate::grid::{Grid, Layer, OreType};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DigStatus {
+    Ok,
+    OutOfBounds,
+    AlreadyEmpty,
+    Bedrock,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DigResult {
+    pub status: DigStatus,
+    pub ore: OreType,
+}
+
+pub fn try_dig(grid: &mut Grid, x: i32, y: i32) -> DigResult {
+    let tile_opt = grid.get(x, y).copied();
+    let Some(t) = tile_opt else {
+        return DigResult { status: DigStatus::OutOfBounds, ore: OreType::None };
+    };
+    if t.layer == Layer::Bedrock {
+        return DigResult { status: DigStatus::Bedrock, ore: OreType::None };
+    }
+    if !t.solid {
+        return DigResult { status: DigStatus::AlreadyEmpty, ore: OreType::None };
+    }
+    let ore = t.ore;
+    grid.set(x, y, crate::grid::Tile { solid: false, layer: t.layer, ore: OreType::None });
+    DigResult { status: DigStatus::Ok, ore }
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+```bash
+cargo test --test dig
 ```
 Expected: 5/5 passing.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/terrain/grid.gd tests/unit/test_grid.gd
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Add Grid pure-data tile container with unit tests"
+git add src/dig.rs tests/dig.rs
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Add try_dig pure function with status enum and unit tests"
 ```
 
 ---
 
-## Task 4: Inventory (pure data layer) — TDD
+## Task 6: Components & systems module skeleton
 
 **Files:**
-- Create: `scripts/items/inventory.gd`
-- Test: `tests/unit/test_inventory.gd`
+- Modify: `src/components.rs`
+- Modify: `src/systems/mod.rs`
+- Create: `src/systems/setup.rs`, `src/systems/player.rs`, `src/systems/camera.rs`, `src/systems/chunk_lifecycle.rs`, `src/systems/chunk_render.rs`, `src/systems/ore_drop.rs`, `src/systems/hud.rs`
+- Modify: `src/app.rs`
 
-- [ ] **Step 1: Write failing tests for Inventory**
+- [ ] **Step 1: Define components**
 
-Create `tests/unit/test_inventory.gd`:
+Replace `src/components.rs`:
+```rust
+use bevy::prelude::*;
+use crate::grid::OreType;
 
-```gdscript
-extends GutTest
+#[derive(Component)]
+pub struct Player;
 
-const Inventory = preload("res://scripts/items/inventory.gd")
-const Grid = preload("res://scripts/terrain/grid.gd")
+#[derive(Component, Default)]
+pub struct Velocity(pub Vec2);
 
-func test_empty_inventory_count_is_zero():
-    var inv = Inventory.new()
-    assert_eq(inv.get_count(Grid.Ore.COPPER), 0)
-
-func test_add_increments_count():
-    var inv = Inventory.new()
-    inv.add(Grid.Ore.COPPER, 3)
-    assert_eq(inv.get_count(Grid.Ore.COPPER), 3)
-    inv.add(Grid.Ore.COPPER, 2)
-    assert_eq(inv.get_count(Grid.Ore.COPPER), 5)
-
-func test_remove_decrements_count():
-    var inv = Inventory.new()
-    inv.add(Grid.Ore.SILVER, 5)
-    inv.remove(Grid.Ore.SILVER, 2)
-    assert_eq(inv.get_count(Grid.Ore.SILVER), 3)
-
-func test_changed_signal_fires_on_add():
-    var inv = Inventory.new()
-    watch_signals(inv)
-    inv.add(Grid.Ore.GOLD, 1)
-    assert_signal_emitted_with_parameters(inv, "changed", [Grid.Ore.GOLD, 1])
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-```bash
-"$GODOT" --headless --path . -s res://addons/gut/gut_cmdln.gd -gtest=res://tests/unit/test_inventory.gd -gexit
-```
-Expected: 4 failing tests.
-
-- [ ] **Step 3: Implement Inventory**
-
-Create `scripts/items/inventory.gd`:
-
-```gdscript
-class_name Inventory extends RefCounted
-
-signal changed(ore_type: int, new_count: int)
-
-var _counts: Dictionary = {}
-
-func add(ore_type: int, n: int) -> void:
-    var c = _counts.get(ore_type, 0) + n
-    _counts[ore_type] = c
-    changed.emit(ore_type, c)
-
-func remove(ore_type: int, n: int) -> void:
-    var c = max(0, _counts.get(ore_type, 0) - n)
-    _counts[ore_type] = c
-    changed.emit(ore_type, c)
-
-func get_count(ore_type: int) -> int:
-    return _counts.get(ore_type, 0)
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Same command as Step 2. Expected: 4/4 passing.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add scripts/items/inventory.gd tests/unit/test_inventory.gd
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Add Inventory with changed signal and unit tests"
-```
-
----
-
-## Task 5: TerrainGen (procedural generation) — TDD
-
-**Files:**
-- Create: `scripts/terrain/terrain_gen.gd`
-- Test: `tests/unit/test_terrain_gen.gd`
-
-- [ ] **Step 1: Write failing tests for TerrainGen**
-
-Create `tests/unit/test_terrain_gen.gd`:
-
-```gdscript
-extends GutTest
-
-const TerrainGen = preload("res://scripts/terrain/terrain_gen.gd")
-const Grid = preload("res://scripts/terrain/grid.gd")
-
-func test_generated_grid_has_requested_dimensions():
-    var g = TerrainGen.generate(80, 200, 12345)
-    assert_eq(g.width(), 80)
-    assert_eq(g.height(), 200)
-
-func test_outermost_ring_is_bedrock():
-    var g = TerrainGen.generate(40, 60, 1)
-    for x in range(g.width()):
-        assert_eq(g.get_tile(x, 0).layer, Grid.Layer.BEDROCK, "top row x=%d" % x)
-        assert_eq(g.get_tile(x, g.height() - 1).layer, Grid.Layer.BEDROCK, "bottom row x=%d" % x)
-    for y in range(g.height()):
-        assert_eq(g.get_tile(0, y).layer, Grid.Layer.BEDROCK, "left col y=%d" % y)
-        assert_eq(g.get_tile(g.width() - 1, y).layer, Grid.Layer.BEDROCK, "right col y=%d" % y)
-
-func test_surface_strip_is_walkable():
-    var g = TerrainGen.generate(40, 60, 1)
-    # rows 1..3 (just inside top bedrock) are non-solid surface
-    for y in range(1, 4):
-        for x in range(1, g.width() - 1):
-            assert_false(g.get_tile(x, y).solid, "surface tile %d,%d should be non-solid" % [x, y])
-
-func test_depth_layers_appear_in_order():
-    var g = TerrainGen.generate(40, 200, 1)
-    # below surface, dirt → stone → deep → (bedrock floor)
-    assert_eq(g.get_tile(20, 10).layer, Grid.Layer.DIRT)
-    assert_eq(g.get_tile(20, 80).layer, Grid.Layer.STONE)
-    assert_eq(g.get_tile(20, 160).layer, Grid.Layer.DEEP)
-
-func test_spawn_pocket_is_carved():
-    var g = TerrainGen.generate(40, 200, 1)
-    var sp = TerrainGen.spawn_tile(g)
-    # 3x3 pocket centered on sp is non-solid
-    for dy in range(-1, 2):
-        for dx in range(-1, 2):
-            assert_false(g.get_tile(sp.x + dx, sp.y + dy).solid,
-                "spawn pocket tile %d,%d should be non-solid" % [sp.x + dx, sp.y + dy])
-    # tile directly under the pocket is solid floor with no ore
-    var floor_t = g.get_tile(sp.x, sp.y + 2)
-    assert_true(floor_t.solid)
-    assert_eq(floor_t.ore, Grid.Ore.NONE)
-
-func test_deterministic_for_same_seed():
-    var a = TerrainGen.generate(40, 60, 42)
-    var b = TerrainGen.generate(40, 60, 42)
-    for y in range(a.height()):
-        for x in range(a.width()):
-            assert_eq(a.get_tile(x, y), b.get_tile(x, y), "tile %d,%d mismatch" % [x, y])
-
-func test_ore_distribution_in_tolerance():
-    var g = TerrainGen.generate(80, 200, 7)
-    var copper = 0
-    var silver = 0
-    var gold = 0
-    for y in range(g.height()):
-        for x in range(g.width()):
-            var o = g.get_tile(x, y).ore
-            if o == Grid.Ore.COPPER: copper += 1
-            elif o == Grid.Ore.SILVER: silver += 1
-            elif o == Grid.Ore.GOLD: gold += 1
-    # Loose tolerance bands; tune later. Each ore should at least exist.
-    assert_gt(copper, 50, "copper count")
-    assert_gt(silver, 20, "silver count")
-    assert_gt(gold, 5, "gold count")
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-```bash
-"$GODOT" --headless --path . -s res://addons/gut/gut_cmdln.gd -gtest=res://tests/unit/test_terrain_gen.gd -gexit
-```
-Expected: 7 failing tests.
-
-- [ ] **Step 3: Implement TerrainGen**
-
-Create `scripts/terrain/terrain_gen.gd`:
-
-```gdscript
-class_name TerrainGen extends RefCounted
-
-const Grid = preload("res://scripts/terrain/grid.gd")
-
-# Layer band fractions (of interior height, after surface strip)
-const SURFACE_ROWS := 3       # rows 1..3 are walkable surface
-const DIRT_FRAC := 0.30
-const STONE_FRAC := 0.40
-const DEEP_FRAC := 0.27
-# Remaining rows form the bedrock floor.
-
-# Per-layer ore probabilities (rough; tune via playtest).
-const ORE_PROBS := {
-    Grid.Layer.DIRT:  {Grid.Ore.COPPER: 0.04, Grid.Ore.SILVER: 0.005, Grid.Ore.GOLD: 0.0},
-    Grid.Layer.STONE: {Grid.Ore.COPPER: 0.02, Grid.Ore.SILVER: 0.025, Grid.Ore.GOLD: 0.003},
-    Grid.Layer.DEEP:  {Grid.Ore.COPPER: 0.005, Grid.Ore.SILVER: 0.015, Grid.Ore.GOLD: 0.02},
+#[derive(Component)]
+pub struct TerrainChunk {
+    pub coord: IVec2,
 }
 
-static func generate(width: int, height: int, seed: int) -> Grid:
-    var rng = RandomNumberGenerator.new()
-    rng.seed = seed
-    var g = Grid.new(width, height)
+#[derive(Component)]
+pub struct ChunkDirty;
 
-    var interior_h = height - 2 - SURFACE_ROWS
-    var dirt_end = 1 + SURFACE_ROWS + int(interior_h * DIRT_FRAC)
-    var stone_end = dirt_end + int(interior_h * STONE_FRAC)
-    var deep_end = stone_end + int(interior_h * DEEP_FRAC)
-
-    for y in range(height):
-        for x in range(width):
-            var tile := {"solid": true, "layer": Grid.Layer.DIRT, "ore": Grid.Ore.NONE}
-            if x == 0 or y == 0 or x == width - 1 or y == height - 1:
-                tile.layer = Grid.Layer.BEDROCK  # bedrock ring
-            elif y <= SURFACE_ROWS:
-                tile.solid = false  # walkable surface strip
-                tile.layer = Grid.Layer.DIRT
-            elif y < dirt_end:
-                tile.layer = Grid.Layer.DIRT
-                _maybe_assign_ore(tile, rng)
-            elif y < stone_end:
-                tile.layer = Grid.Layer.STONE
-                _maybe_assign_ore(tile, rng)
-            elif y < deep_end:
-                tile.layer = Grid.Layer.DEEP
-                _maybe_assign_ore(tile, rng)
-            else:
-                tile.layer = Grid.Layer.BEDROCK  # bedrock floor band
-            g.set_tile(x, y, tile)
-
-    _carve_spawn_pocket(g)
-    return g
-
-static func spawn_tile(g: Grid) -> Vector2i:
-    return Vector2i(g.width() / 2, SURFACE_ROWS + 1)
-
-static func _maybe_assign_ore(tile: Dictionary, rng: RandomNumberGenerator) -> void:
-    var probs: Dictionary = ORE_PROBS[tile.layer]
-    var r = rng.randf()
-    var acc = 0.0
-    for ore in probs.keys():
-        acc += probs[ore]
-        if r < acc:
-            tile.ore = ore
-            return
-
-static func _carve_spawn_pocket(g: Grid) -> void:
-    var sp = spawn_tile(g)
-    for dy in range(-1, 2):
-        for dx in range(-1, 2):
-            var t = g.get_tile(sp.x + dx, sp.y + dy)
-            t.solid = false
-            t.ore = Grid.Ore.NONE
-    # ensure non-ore solid floor directly under pocket
-    var floor_t = g.get_tile(sp.x, sp.y + 2)
-    floor_t.solid = true
-    floor_t.ore = Grid.Ore.NONE
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-```bash
-"$GODOT" --headless --path . -s res://addons/gut/gut_cmdln.gd -gtest=res://tests/unit/test_terrain_gen.gd -gexit
-```
-Expected: 7/7 passing. If the depth-layer test fails, double-check the band fractions add up close to 1.0 (they sum to 0.97; the residual feeds the bedrock floor band).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add scripts/terrain/terrain_gen.gd tests/unit/test_terrain_gen.gd
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Add deterministic TerrainGen with layer bands and ore distribution"
-```
-
----
-
-## Task 6: Terrain dig API (no rendering) — TDD
-
-**Files:**
-- Create: `scripts/terrain/terrain.gd` (dig API only — chunk lifecycle added in Task 7)
-- Test: `tests/unit/test_terrain_dig.gd`
-
-- [ ] **Step 1: Write failing tests for Terrain.try_dig**
-
-Create `tests/unit/test_terrain_dig.gd`:
-
-```gdscript
-extends GutTest
-
-const Terrain = preload("res://scripts/terrain/terrain.gd")
-const Grid = preload("res://scripts/terrain/grid.gd")
-
-func _make_terrain() -> Terrain:
-    var t = Terrain.new()
-    var g = Grid.new(10, 10)
-    # set everything to non-bedrock solid dirt (Grid default already)
-    # add an ore tile at (3,3)
-    g.set_tile(3, 3, {"solid": true, "layer": Grid.Layer.DIRT, "ore": Grid.Ore.COPPER})
-    # add bedrock at (0,0)
-    g.set_tile(0, 0, {"solid": true, "layer": Grid.Layer.BEDROCK, "ore": Grid.Ore.NONE})
-    t.set_grid(g)
-    return t
-
-func test_dig_solid_tile_succeeds_returns_ore_type():
-    var t = _make_terrain()
-    var r = t.try_dig(Vector2i(3, 3))
-    assert_eq(r.status, Terrain.DigStatus.OK)
-    assert_eq(r.ore, Grid.Ore.COPPER)
-
-func test_dig_clears_tile_in_grid():
-    var t = _make_terrain()
-    t.try_dig(Vector2i(3, 3))
-    assert_false(t._grid.get_tile(3, 3).solid)
-
-func test_dig_emits_tile_broken_signal():
-    var t = _make_terrain()
-    watch_signals(t)
-    t.try_dig(Vector2i(3, 3))
-    assert_signal_emitted(t, "tile_broken")
-
-func test_dig_out_of_bounds_returns_oob():
-    var t = _make_terrain()
-    var r = t.try_dig(Vector2i(-1, 5))
-    assert_eq(r.status, Terrain.DigStatus.OUT_OF_BOUNDS)
-
-func test_dig_already_empty_returns_already_empty():
-    var t = _make_terrain()
-    t.try_dig(Vector2i(3, 3))
-    var r = t.try_dig(Vector2i(3, 3))
-    assert_eq(r.status, Terrain.DigStatus.ALREADY_EMPTY)
-
-func test_dig_bedrock_returns_bedrock():
-    var t = _make_terrain()
-    var r = t.try_dig(Vector2i(0, 0))
-    assert_eq(r.status, Terrain.DigStatus.BEDROCK)
-    assert_true(t._grid.get_tile(0, 0).solid, "bedrock should remain solid")
-
-func test_is_solid_query():
-    var t = _make_terrain()
-    assert_true(t.is_solid(Vector2i(3, 3)))
-    t.try_dig(Vector2i(3, 3))
-    assert_false(t.is_solid(Vector2i(3, 3)))
-
-func test_world_to_tile_round_trip():
-    var t = _make_terrain()
-    t.tile_size_px = 16
-    assert_eq(t.world_to_tile(Vector2(24, 40)), Vector2i(1, 2))
-    assert_eq(t.tile_to_world(Vector2i(1, 2)), Vector2(24, 40))  # tile center
-```
-
-Note: tests touch `t._grid` directly to assert state — this is acceptable for unit tests of the wrapper. Once chunk rendering is added in Task 7, those tests still hold (we only ever mutate via `try_dig`).
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-```bash
-"$GODOT" --headless --path . -s res://addons/gut/gut_cmdln.gd -gtest=res://tests/unit/test_terrain_dig.gd -gexit
-```
-Expected: 8 failing tests.
-
-- [ ] **Step 3: Implement Terrain (dig API only)**
-
-Create `scripts/terrain/terrain.gd`:
-
-```gdscript
-class_name Terrain extends Node2D
-
-const Grid = preload("res://scripts/terrain/grid.gd")
-
-enum DigStatus { OK, OUT_OF_BOUNDS, ALREADY_EMPTY, BEDROCK }
-
-signal tile_broken(tile: Vector2i, ore_type: int, world_pos: Vector2)
-
-@export var tile_size_px: int = 16
-
-var _grid: Grid
-
-func set_grid(g: Grid) -> void:
-    _grid = g
-
-func is_solid(tile: Vector2i) -> bool:
-    var t = _grid.get_tile(tile.x, tile.y)
-    return t != null and t.solid
-
-func try_dig(tile: Vector2i) -> Dictionary:
-    var t = _grid.get_tile(tile.x, tile.y)
-    if t == null:
-        return {"status": DigStatus.OUT_OF_BOUNDS, "ore": Grid.Ore.NONE}
-    if t.layer == Grid.Layer.BEDROCK:
-        return {"status": DigStatus.BEDROCK, "ore": Grid.Ore.NONE}
-    if not t.solid:
-        return {"status": DigStatus.ALREADY_EMPTY, "ore": Grid.Ore.NONE}
-    var ore = t.ore
-    var new_t = {"solid": false, "layer": t.layer, "ore": Grid.Ore.NONE}
-    _grid.set_tile(tile.x, tile.y, new_t)
-    var wp = tile_to_world(tile)
-    tile_broken.emit(tile, ore, wp)
-    return {"status": DigStatus.OK, "ore": ore}
-
-func world_to_tile(pos: Vector2) -> Vector2i:
-    return Vector2i(int(pos.x) / tile_size_px, int(pos.y) / tile_size_px)
-
-func tile_to_world(tile: Vector2i) -> Vector2:
-    return Vector2(tile.x * tile_size_px + tile_size_px / 2.0,
-                   tile.y * tile_size_px + tile_size_px / 2.0)
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Same command as Step 2. Expected: 8/8 passing.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add scripts/terrain/terrain.gd tests/unit/test_terrain_dig.gd
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Add Terrain dig API with status enum and signal"
-```
-
----
-
-## Task 7: TerrainChunk renderer (marching squares, visual)
-
-**Files:**
-- Create: `scripts/terrain/terrain_chunk.gd`
-- Modify: `scripts/terrain/terrain.gd` (add chunk lifecycle)
-
-This task is visual — manually verified, not unit-tested.
-
-- [ ] **Step 1: Implement TerrainChunk**
-
-Create `scripts/terrain/terrain_chunk.gd`:
-
-```gdscript
-class_name TerrainChunk extends Node2D
-
-const Grid = preload("res://scripts/terrain/grid.gd")
-
-const CHUNK_TILES := 16
-
-var _grid: Grid
-var _chunk_x: int
-var _chunk_y: int
-var _tile_size: int
-var _dirty: bool = true
-
-@onready var _solid_polys: Node2D = Node2D.new()
-@onready var _collision_body: StaticBody2D = StaticBody2D.new()
-
-# Layer color palette
-const LAYER_COLORS := {
-    Grid.Layer.DIRT: Color(0.55, 0.42, 0.27),
-    Grid.Layer.STONE: Color(0.42, 0.33, 0.22),
-    Grid.Layer.DEEP: Color(0.29, 0.23, 0.15),
-    Grid.Layer.BEDROCK: Color(0.16, 0.13, 0.10),
+#[derive(Component)]
+pub struct OreSprite {
+    pub ore: OreType,
 }
 
-const ORE_COLORS := {
-    Grid.Ore.COPPER: Color(0.85, 0.45, 0.20),
-    Grid.Ore.SILVER: Color(0.85, 0.85, 0.92),
-    Grid.Ore.GOLD: Color(0.95, 0.78, 0.25),
+#[derive(Component)]
+pub struct OreDrop {
+    pub ore: OreType,
 }
 
-func setup(g: Grid, cx: int, cy: int, tile_size: int) -> void:
-    _grid = g
-    _chunk_x = cx
-    _chunk_y = cy
-    _tile_size = tile_size
-    position = Vector2(cx * CHUNK_TILES * tile_size, cy * CHUNK_TILES * tile_size)
-    add_child(_solid_polys)
-    add_child(_collision_body)
-
-func mark_dirty() -> void:
-    _dirty = true
-
-func _process(_dt: float) -> void:
-    if _dirty:
-        _remesh()
-        _dirty = false
-
-func _remesh() -> void:
-    # clear previous draw + collision children
-    for c in _solid_polys.get_children():
-        c.queue_free()
-    for c in _collision_body.get_children():
-        c.queue_free()
-
-    # MILESTONE 1 v1: per-tile rect rendering (placeholder for true marching squares).
-    # This produces blocky output that already validates the data flow + collision; the
-    # marching-squares pass is a follow-up refinement once the prototype is playable.
-    # Switching to true marching squares affects ONLY this method.
-    for ly in range(CHUNK_TILES):
-        for lx in range(CHUNK_TILES):
-            var gx = _chunk_x * CHUNK_TILES + lx
-            var gy = _chunk_y * CHUNK_TILES + ly
-            var t = _grid.get_tile(gx, gy)
-            if t == null or not t.solid:
-                continue
-            var rect_pos = Vector2(lx * _tile_size, ly * _tile_size)
-            var rect_size = Vector2(_tile_size, _tile_size)
-
-            var poly = Polygon2D.new()
-            poly.color = LAYER_COLORS.get(t.layer, Color.MAGENTA)
-            poly.polygon = PackedVector2Array([
-                rect_pos,
-                rect_pos + Vector2(rect_size.x, 0),
-                rect_pos + rect_size,
-                rect_pos + Vector2(0, rect_size.y),
-            ])
-            _solid_polys.add_child(poly)
-
-            var shape = CollisionShape2D.new()
-            var rect_shape = RectangleShape2D.new()
-            rect_shape.size = rect_size
-            shape.shape = rect_shape
-            shape.position = rect_pos + rect_size / 2
-            _collision_body.add_child(shape)
-
-            if t.ore != Grid.Ore.NONE:
-                var ore_dot = Polygon2D.new()
-                ore_dot.color = ORE_COLORS[t.ore]
-                var c = rect_pos + rect_size / 2
-                var r = _tile_size * 0.25
-                ore_dot.polygon = PackedVector2Array([
-                    c + Vector2(-r, -r),
-                    c + Vector2(r, -r),
-                    c + Vector2(r, r),
-                    c + Vector2(-r, r),
-                ])
-                _solid_polys.add_child(ore_dot)
+#[derive(Component)]
+pub struct MainCamera;
 ```
 
-**Why blocky now, marching squares later:** The spec calls for smooth-contour marching squares. We start with per-tile rects so the data flow, collision, and ore visuals are validated end-to-end, *then* swap the `_remesh` body for a true marching-squares implementation in a follow-up task within this milestone. This keeps each commit small and individually testable.
+- [ ] **Step 2: Stub the systems modules**
 
-- [ ] **Step 2: Add chunk lifecycle to Terrain**
-
-Edit `scripts/terrain/terrain.gd` — add at the end of the script:
-
-```gdscript
-const TerrainChunk = preload("res://scripts/terrain/terrain_chunk.gd")
-const CHUNK_MARGIN := 1  # extra chunks around camera rect
-
-var _chunks: Dictionary = {}  # Vector2i(cx,cy) -> TerrainChunk
-
-@export var camera_path: NodePath
-
-func _process(_dt: float) -> void:
-    if _grid == null or camera_path.is_empty():
-        return
-    var cam: Camera2D = get_node_or_null(camera_path)
-    if cam == null:
-        return
-    var view = get_viewport_rect().size / cam.zoom
-    var cam_rect = Rect2(cam.global_position - view / 2, view)
-    var min_chunk = _world_to_chunk(cam_rect.position) - Vector2i(CHUNK_MARGIN, CHUNK_MARGIN)
-    var max_chunk = _world_to_chunk(cam_rect.position + cam_rect.size) + Vector2i(CHUNK_MARGIN, CHUNK_MARGIN)
-    var visible := {}
-    for cy in range(min_chunk.y, max_chunk.y + 1):
-        for cx in range(min_chunk.x, max_chunk.x + 1):
-            var key = Vector2i(cx, cy)
-            visible[key] = true
-            if not _chunks.has(key):
-                _spawn_chunk(cx, cy)
-    for key in _chunks.keys():
-        if not visible.has(key):
-            _despawn_chunk(key)
-
-func _world_to_chunk(pos: Vector2) -> Vector2i:
-    var t = world_to_tile(pos)
-    return Vector2i(t.x / TerrainChunk.CHUNK_TILES, t.y / TerrainChunk.CHUNK_TILES)
-
-func _spawn_chunk(cx: int, cy: int) -> void:
-    var chunk = TerrainChunk.new()
-    add_child(chunk)
-    chunk.setup(_grid, cx, cy, tile_size_px)
-    _chunks[Vector2i(cx, cy)] = chunk
-
-func _despawn_chunk(key: Vector2i) -> void:
-    var chunk = _chunks[key]
-    chunk.queue_free()
-    _chunks.erase(key)
-
-# call this from try_dig success path: replace the existing `tile_broken.emit(...)` line
-# with this helper so chunk dirty-marking is centralized
-func _on_tile_changed(tile: Vector2i) -> void:
-    var ck = Vector2i(tile.x / TerrainChunk.CHUNK_TILES, tile.y / TerrainChunk.CHUNK_TILES)
-    if _chunks.has(ck):
-        _chunks[ck].mark_dirty()
+Replace `src/systems/mod.rs`:
+```rust
+pub mod camera;
+pub mod chunk_lifecycle;
+pub mod chunk_render;
+pub mod hud;
+pub mod ore_drop;
+pub mod player;
+pub mod setup;
 ```
 
-Then in `try_dig`, just before `tile_broken.emit(...)`, add:
-```gdscript
-    _on_tile_changed(tile)
+In each system file, add a placeholder so the crate compiles:
+```rust
+use bevy::prelude::*;
+
+// systems will be added in subsequent tasks
 ```
 
-- [ ] **Step 3: Re-run dig unit tests to confirm no regressions**
+- [ ] **Step 3: Verify compile**
 
 ```bash
-"$GODOT" --headless --path . -s res://addons/gut/gut_cmdln.gd -gtest=res://tests/unit/test_terrain_dig.gd -gexit
+cargo build
 ```
-Expected: 8/8 still passing. (The new `_on_tile_changed` is a no-op when `_chunks` is empty, which it is in unit tests.)
-
-- [ ] **Step 4: Smoke-test in editor**
-
-Create a quick scratch scene (don't commit) — Node2D root, add a Terrain instance, set its `tile_size_px=16`, then in a `_ready()` script call `set_grid(TerrainGen.generate(40, 60, 1))`. Add a Camera2D as a child, set `camera_path` on Terrain to point to it. Press Play.
-
-Expected: a chunked, blocky map renders with visibly different colored bands (dirt/stone/deep) and small ore dots. Camera centers on origin; you may need to move the camera to see the surface area.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add scripts/terrain/terrain_chunk.gd scripts/terrain/terrain.gd
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Add TerrainChunk renderer (per-tile placeholder) and chunk lifecycle"
-```
-
----
-
-## Task 8: Player controller (movement + collision)
-
-**Files:**
-- Create: `scripts/player/player.gd`
-- Create: `scenes/player.tscn`
-
-- [ ] **Step 1: Build the player scene**
-
-In the editor: New Scene → CharacterBody2D root, name it `Player`. Add child `CollisionShape2D` with a `RectangleShape2D` of size (12, 12). Add child `Polygon2D` (the visual) with a 12×12 cyan square so the player is visible. Save as `scenes/player.tscn`. Attach `scripts/player/player.gd` (next step) to the root.
-
-- [ ] **Step 2: Implement movement script**
-
-Create `scripts/player/player.gd`:
-
-```gdscript
-class_name Player extends CharacterBody2D
-
-@export var speed_px_per_s: float = 120.0
-
-func _physics_process(_dt: float) -> void:
-    var dir = Input.get_vector("ui_left", "ui_right", "ui_up", "ui_down")
-    velocity = dir * speed_px_per_s
-    move_and_slide()
-```
-
-Note: WASD will arrive in Task 9 along with input map setup. Default arrows work via the built-in `ui_*` actions for the smoke test.
-
-- [ ] **Step 3: Smoke-test movement**
-
-Add the Player scene as a child of your scratch terrain test scene from Task 7. Play. Use arrow keys; the cyan square should move and stop against the rendered chunk collision.
-
-Expected: smooth movement, proper collision against solid tiles, no z-order issues (player visible above terrain — adjust z-index if needed).
+Expected: success (warnings about unused imports are fine).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add scripts/player/player.gd scenes/player.tscn
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Add CharacterBody2D player with arrow-key movement"
+git add src/components.rs src/systems/
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Add component markers and systems module skeleton"
 ```
 
 ---
 
-## Task 9: Player dig input + WASD input map
+## Task 7: Setup system + camera (visible window with a single sprite)
 
 **Files:**
-- Modify: `scripts/player/player.gd`
-- Modify: `project.godot` (input map)
+- Modify: `src/systems/setup.rs`, `src/systems/camera.rs`
+- Modify: `src/app.rs`
 
-- [ ] **Step 1: Define input actions**
+- [ ] **Step 1: Implement setup system**
 
-In the editor: Project → Project Settings → Input Map. Add these actions and bindings:
+`src/systems/setup.rs`:
+```rust
+use bevy::prelude::*;
+use crate::components::{MainCamera, Player, Velocity};
+use crate::grid::Grid;
+use crate::inventory::Inventory;
+use crate::terrain_gen;
 
-| Action | Key |
-|---|---|
-| `move_left` | A |
-| `move_right` | D |
-| `move_up` | W |
-| `move_down` | S |
-| `dig` | Mouse Button 1 (left click) |
+pub const TILE_SIZE_PX: f32 = 16.0;
+pub const MAP_W: u32 = 80;
+pub const MAP_H: u32 = 200;
 
-Save. This writes input bindings into `project.godot`.
+pub fn setup_world(mut commands: Commands) {
+    let seed: u64 = rand::random();
+    info!("world seed: {}", seed);     // logged so playtests can be reproduced
+    let grid = terrain_gen::generate(MAP_W, MAP_H, seed);
+    let sp = terrain_gen::spawn_tile(&grid);
+    let player_world = tile_center_world(sp.0, sp.1);
 
-- [ ] **Step 2: Replace input handling and add dig**
+    commands.insert_resource(grid);
+    commands.insert_resource(Inventory::default());
 
-Edit `scripts/player/player.gd`:
+    // Player
+    commands.spawn((
+        Player,
+        Velocity::default(),
+        Sprite {
+            color: Color::srgb(0.30, 0.60, 0.90),
+            custom_size: Some(Vec2::splat(12.0)),
+            ..default()
+        },
+        Transform::from_translation(player_world.extend(10.0)),
+    ));
 
-```gdscript
-class_name Player extends CharacterBody2D
-
-const Grid = preload("res://scripts/terrain/grid.gd")
-
-@export var speed_px_per_s: float = 120.0
-@export var dig_reach_tiles: float = 2.0
-@export var dig_cooldown_s: float = 0.15
-@export var terrain_path: NodePath
-@export var ore_drop_scene: PackedScene
-@export var drops_parent_path: NodePath
-
-var _cooldown_left: float = 0.0
-var _terrain: Node = null
-var _drops_parent: Node = null
-
-func _ready() -> void:
-    _terrain = get_node_or_null(terrain_path)
-    _drops_parent = get_node_or_null(drops_parent_path)
-
-func _physics_process(dt: float) -> void:
-    var dir = Input.get_vector("move_left", "move_right", "move_up", "move_down")
-    velocity = dir * speed_px_per_s
-    move_and_slide()
-    _cooldown_left = max(0.0, _cooldown_left - dt)
-    if Input.is_action_pressed("dig") and _cooldown_left == 0.0:
-        _try_dig()
-
-func _try_dig() -> void:
-    if _terrain == null:
-        return
-    var mouse_world = get_global_mouse_position()
-    var tile = _terrain.world_to_tile(mouse_world)
-    var tile_world_center = _terrain.tile_to_world(tile)
-    var dist_tiles = (tile_world_center - global_position).length() / float(_terrain.tile_size_px)
-    if dist_tiles > dig_reach_tiles:
-        return
-    var result = _terrain.try_dig(tile)
-    _cooldown_left = dig_cooldown_s
-    if result.status == _terrain.DigStatus.OK and result.ore != Grid.Ore.NONE:
-        _spawn_drop(result.ore, tile_world_center)
-
-func _spawn_drop(ore_type: int, world_pos: Vector2) -> void:
-    if ore_drop_scene == null or _drops_parent == null:
-        return
-    var drop = ore_drop_scene.instantiate()
-    drop.ore_type = ore_type
-    drop.global_position = world_pos
-    _drops_parent.add_child(drop)
-```
-
-- [ ] **Step 3: Smoke-test dig (will need OreDrop in next task — for now, watch tiles disappear)**
-
-Set `ore_drop_scene` to `null` in the inspector. In your scratch scene, set Player's `terrain_path` to point at the Terrain node, leave `drops_parent_path` empty for now. Play; click on adjacent tiles. Expected: tiles vanish on click, bedrock doesn't, distant tiles ignored.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add scripts/player/player.gd project.godot
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Add WASD input map and click-to-dig with reach + cooldown"
-```
-
----
-
-## Task 10: OreDrop pickup entity
-
-**Files:**
-- Create: `scripts/items/ore_drop.gd`
-- Create: `scenes/ore_drop.tscn`
-
-- [ ] **Step 1: Build OreDrop scene**
-
-New Scene → `Area2D` root, name `OreDrop`. Add `CollisionShape2D` with `CircleShape2D` radius=4. Add `Polygon2D` for visual (small diamond, color set in script per ore type). Save as `scenes/ore_drop.tscn`. Attach `scripts/items/ore_drop.gd`.
-
-- [ ] **Step 2: Implement OreDrop**
-
-Create `scripts/items/ore_drop.gd`:
-
-```gdscript
-class_name OreDrop extends Area2D
-
-const Grid = preload("res://scripts/terrain/grid.gd")
-
-const ORE_COLORS := {
-    Grid.Ore.COPPER: Color(0.85, 0.45, 0.20),
-    Grid.Ore.SILVER: Color(0.85, 0.85, 0.92),
-    Grid.Ore.GOLD: Color(0.95, 0.78, 0.25),
+    // Camera
+    commands.spawn((
+        Camera2d,
+        MainCamera,
+        Transform::from_translation(player_world.extend(100.0)),
+    ));
 }
 
-@export var ore_type: int = Grid.Ore.NONE
-@export var vacuum_radius_tiles: float = 1.0
-@export var vacuum_speed_px_per_s: float = 200.0
-
-var _player: Node2D = null
-var _inventory  # Inventory ref (RefCounted)
-var _tile_size_px: int = 16
-
-func setup(player: Node2D, inv, tile_size_px: int) -> void:
-    _player = player
-    _inventory = inv
-    _tile_size_px = tile_size_px
-
-func _ready() -> void:
-    var poly: Polygon2D = $Polygon2D
-    if poly:
-        poly.color = ORE_COLORS.get(ore_type, Color.MAGENTA)
-    body_entered.connect(_on_body_entered)
-    area_entered.connect(_on_area_entered)
-
-func _process(dt: float) -> void:
-    if _player == null:
-        return
-    var to_player = _player.global_position - global_position
-    var dist_tiles = to_player.length() / float(_tile_size_px)
-    if dist_tiles < vacuum_radius_tiles:
-        global_position += to_player.normalized() * vacuum_speed_px_per_s * dt
-        if to_player.length() < 6.0:
-            _deliver()
-
-func _on_body_entered(_b) -> void: _deliver()
-func _on_area_entered(_a) -> void: _deliver()
-
-func _deliver() -> void:
-    if _inventory != null and ore_type != Grid.Ore.NONE:
-        _inventory.add(ore_type, 1)
-    queue_free()
+pub fn tile_center_world(x: i32, y: i32) -> Vec2 {
+    Vec2::new(
+        x as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0,
+        // invert Y so deeper tiles render below in world (Bevy Y goes up)
+        -(y as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0),
+    )
+}
 ```
 
-- [ ] **Step 3: Wire OreDrop in Player**
+(Note: the `Sprite { color, custom_size, .. }` form is Bevy 0.15's required-component pattern; older versions use `SpriteBundle`. Adapt as needed.)
 
-Edit `scripts/player/player.gd` `_spawn_drop` to call `setup` after instantiation:
+- [ ] **Step 2: Implement camera follow**
 
-```gdscript
-func _spawn_drop(ore_type: int, world_pos: Vector2) -> void:
-    if ore_drop_scene == null or _drops_parent == null:
-        return
-    var drop = ore_drop_scene.instantiate()
-    drop.ore_type = ore_type
-    drop.global_position = world_pos
-    _drops_parent.add_child(drop)
-    drop.setup(self, _inventory_ref, _terrain.tile_size_px)
+`src/systems/camera.rs`:
+```rust
+use bevy::prelude::*;
+use crate::components::{MainCamera, Player};
+
+pub fn camera_follow_system(
+    player_q: Query<&Transform, (With<Player>, Without<MainCamera>)>,
+    mut cam_q: Query<&mut Transform, With<MainCamera>>,
+    time: Res<Time>,
+) {
+    let Ok(p) = player_q.get_single() else { return };
+    let Ok(mut c) = cam_q.get_single_mut() else { return };
+    let target = p.translation.truncate().extend(c.translation.z);
+    let t = (time.delta_secs() * 6.0).clamp(0.0, 1.0);
+    c.translation = c.translation.lerp(target, t);
+}
 ```
 
-Also add an inventory holder field to Player:
+- [ ] **Step 3: Wire systems in MiningSimPlugin**
 
-```gdscript
-var _inventory_ref  # set externally by main.gd
-func set_inventory(inv) -> void:
-    _inventory_ref = inv
+Replace `src/app.rs`:
+```rust
+use bevy::prelude::*;
+
+use crate::systems::{camera, setup};
+
+pub struct MiningSimPlugin;
+
+impl Plugin for MiningSimPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, setup::setup_world)
+            .add_systems(Update, camera::camera_follow_system);
+    }
+}
 ```
 
-**Ordering note:** `set_inventory` must be called before the first dig can occur. Task 12's `main.gd._ready` does this synchronously before the player can act, so there's no race. If you add an alternate entry point, replicate that ordering.
+- [ ] **Step 4: Run and smoke-test**
 
-- [ ] **Step 4: Smoke-test pickup**
-
-In your scratch scene, set Player's `ore_drop_scene` to `scenes/ore_drop.tscn`, add a `Drops` Node2D under World, point Player's `drops_parent_path` at it. Manually call `player.set_inventory(Inventory.new())` from a temporary `_ready` hook. Play; mine an ore tile, walk near the drop. Expected: drop lerps toward player, vanishes on contact, no errors.
+```bash
+cargo run
+```
+Expected: window opens, you see a single small blue square (the player) on a black background. Camera centered on it. Close the window.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/items/ore_drop.gd scenes/ore_drop.tscn scripts/player/player.gd
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Add OreDrop pickup with auto-vacuum and inventory delivery"
+git add src/systems/setup.rs src/systems/camera.rs src/app.rs
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Add setup system + camera follow; player sprite visible"
 ```
 
 ---
 
-## Task 11: HUD InventoryPanel
+## Task 8: Player movement (input → velocity → translation, no collision)
 
 **Files:**
-- Create: `scripts/hud/inventory_panel.gd`
-- Create: `scenes/hud/inventory_panel.tscn`
+- Modify: `src/systems/player.rs`, `src/app.rs`
 
-- [ ] **Step 1: Build the HUD scene**
+- [ ] **Step 1: Implement movement systems**
 
-New Scene → `Control` root, name `InventoryPanel`. Add a `VBoxContainer` child. Inside it, add three `HBoxContainer`s — each with a `ColorRect` (16×16, ore color) and a `Label` (the count). Name them `RowCopper`, `RowSilver`, `RowGold`. Save as `scenes/hud/inventory_panel.tscn`. Attach script.
+Replace `src/systems/player.rs`:
+```rust
+use bevy::prelude::*;
+use crate::components::{Player, Velocity};
 
-- [ ] **Step 2: Implement InventoryPanel script**
+pub const PLAYER_SPEED_PX_PER_S: f32 = 120.0;
 
-Create `scripts/hud/inventory_panel.gd`:
+pub fn read_input_system(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut q: Query<&mut Velocity, With<Player>>,
+) {
+    let mut dir = Vec2::ZERO;
+    if keys.pressed(KeyCode::KeyW) { dir.y += 1.0; }
+    if keys.pressed(KeyCode::KeyS) { dir.y -= 1.0; }
+    if keys.pressed(KeyCode::KeyA) { dir.x -= 1.0; }
+    if keys.pressed(KeyCode::KeyD) { dir.x += 1.0; }
+    if dir != Vec2::ZERO { dir = dir.normalize(); }
+    for mut v in q.iter_mut() {
+        v.0 = dir * PLAYER_SPEED_PX_PER_S;
+    }
+}
 
-```gdscript
-extends Control
-
-const Grid = preload("res://scripts/terrain/grid.gd")
-
-@onready var _row_copper: HBoxContainer = $VBoxContainer/RowCopper
-@onready var _row_silver: HBoxContainer = $VBoxContainer/RowSilver
-@onready var _row_gold:   HBoxContainer = $VBoxContainer/RowGold
-
-var _inventory  # Inventory
-
-func bind(inv) -> void:
-    _inventory = inv
-    if _inventory:
-        _inventory.changed.connect(_on_changed)
-        _refresh_all()
-
-func _refresh_all() -> void:
-    _set_row(_row_copper, _inventory.get_count(Grid.Ore.COPPER))
-    _set_row(_row_silver, _inventory.get_count(Grid.Ore.SILVER))
-    _set_row(_row_gold,   _inventory.get_count(Grid.Ore.GOLD))
-
-func _on_changed(ore_type: int, new_count: int) -> void:
-    match ore_type:
-        Grid.Ore.COPPER: _set_row(_row_copper, new_count)
-        Grid.Ore.SILVER: _set_row(_row_silver, new_count)
-        Grid.Ore.GOLD:   _set_row(_row_gold,   new_count)
-
-func _set_row(row: HBoxContainer, n: int) -> void:
-    var label: Label = row.get_node("Label")
-    label.text = str(n)
+pub fn apply_velocity_system(
+    time: Res<Time>,
+    mut q: Query<(&Velocity, &mut Transform), With<Player>>,
+) {
+    let dt = time.delta_secs();
+    for (v, mut t) in q.iter_mut() {
+        t.translation.x += v.0.x * dt;
+        t.translation.y += v.0.y * dt;
+    }
+}
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 2: Register in plugin**
 
-```bash
-git add scripts/hud/inventory_panel.gd scenes/hud/inventory_panel.tscn
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Add HUD InventoryPanel with per-ore rows"
+Edit `src/app.rs` `Update` registration:
+```rust
+.add_systems(Update, (
+    crate::systems::player::read_input_system,
+    crate::systems::player::apply_velocity_system,
+    camera::camera_follow_system,
+).chain())
 ```
-
----
-
-## Task 12: Main scene wiring
-
-**Files:**
-- Create: `scripts/main.gd`
-- Create: `scenes/main.tscn`
-- Modify: `project.godot` (set main scene)
-
-- [ ] **Step 1: Build main scene**
-
-New Scene → `Node2D` root named `Main`. Children:
-- `World` (Node2D)
-  - `Terrain` (Node2D, attach `scripts/terrain/terrain.gd`, set `tile_size_px=16`)
-  - `Ores` (Node2D)  *(reserved for milestone-2 use; can stay empty for now)*
-  - `Drops` (Node2D)
-  - Instance of `scenes/player.tscn` named `Player`
-- `Camera2D` (set `position_smoothing_enabled = true`)
-- `HUD` (CanvasLayer)
-  - Instance of `scenes/hud/inventory_panel.tscn`
-
-Set Terrain's `camera_path` to the Camera2D. Set Player's `terrain_path` to Terrain, `drops_parent_path` to Drops, `ore_drop_scene` to `scenes/ore_drop.tscn`.
-
-Save as `scenes/main.tscn`.
-
-- [ ] **Step 2: Implement main script**
-
-Create `scripts/main.gd`:
-
-```gdscript
-extends Node2D
-
-const Inventory = preload("res://scripts/items/inventory.gd")
-const TerrainGen = preload("res://scripts/terrain/terrain_gen.gd")
-
-const MAP_W := 80
-const MAP_H := 200
-
-@onready var _terrain = $World/Terrain
-@onready var _player = $World/Player
-@onready var _camera: Camera2D = $Camera2D
-@onready var _hud_panel = $HUD/InventoryPanel
-
-func _ready() -> void:
-    var seed = randi()
-    var grid = TerrainGen.generate(MAP_W, MAP_H, seed)
-    _terrain.set_grid(grid)
-
-    var inventory = Inventory.new()
-    _player.set_inventory(inventory)
-    _hud_panel.bind(inventory)
-
-    var spawn_tile = TerrainGen.spawn_tile(grid)
-    _player.global_position = _terrain.tile_to_world(spawn_tile)
-    _camera.global_position = _player.global_position
-
-func _process(_dt: float) -> void:
-    _camera.global_position = _camera.global_position.lerp(_player.global_position, 0.15)
-```
-
-Attach the script to the Main root.
-
-- [ ] **Step 3: Set as project main scene**
-
-Project → Project Settings → Application → Run → Main Scene = `res://scenes/main.tscn`.
-
-- [ ] **Step 4: Smoke-test the full loop**
-
-Press F5. Expected:
-- Map renders with banded layers.
-- Player visible in the surface pocket.
-- WASD moves the player; bedrock walls contain.
-- LMB on adjacent solid tiles breaks them; bedrock doesn't.
-- Ore tiles drop pickups, which vacuum into the inventory.
-- HUD counts increment per ore type.
-
-If anything misbehaves, that's a real bug — fix before committing.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add scripts/main.gd scenes/main.tscn project.godot
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Wire main scene with terrain, player, drops, camera, and HUD"
-```
-
----
-
-## Task 13: Marching-squares pass on TerrainChunk
-
-Replace the per-tile-rect placeholder in `TerrainChunk._remesh` with a marching-squares contour mesh. Done as a separate task so the previous milestone is already playable and we have a baseline to compare against.
-
-**Files:**
-- Modify: `scripts/terrain/terrain_chunk.gd`
-
-- [ ] **Step 1: Document the marching-squares lookup**
-
-Marching squares operates on a 2D scalar field. We treat each tile-corner as either inside-solid (1) or outside-solid (0), giving 16 cases per cell. Each case contributes a small polygon (or none) to the contour. References:
-- https://en.wikipedia.org/wiki/Marching_squares
-- For colored solids (this game's case), draw the *interior* polygon — the part of the cell that's "inside" the solid silhouette — colored by the dominant layer of contributing corner tiles.
-
-- [ ] **Step 2: Replace `_remesh` with marching-squares pass**
-
-The replacement uses corner samples between tiles, builds an interior polygon per cell from a 16-case lookup, and emits one Polygon2D per case (colored by the dominant solid corner's layer). Build the lookup as constants at the top of the script. Keep the collision body as before — block-sized rectangles per solid tile is good enough for collision; the visual is what changes.
-
-(Implementation detail intentionally left for the engineer to derive from the standard 16-case marching-squares table — this is a well-known algorithm; importing a recipe verbatim would bloat the plan. Keep the function under ~100 lines.)
 
 - [ ] **Step 3: Smoke-test**
 
-Press F5. Expected: tile boundaries now look smoothed/curved rather than blocky; layer colors still correct; ore dots still visible; collision still feels right (collisions remain rect-sized so the player won't squeeze through smoothed corners — that's a known compromise, acceptable for milestone 1).
+```bash
+cargo run
+```
+Expected: WASD moves the blue square; camera follows.
 
-- [ ] **Step 4: If something looks wrong**, revert this commit and ship milestone 1 with the blocky placeholder. The "is digging fun" question can be answered either way; smooth contour is a quality polish, not a milestone requirement. Document the decision either way in the commit message.
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/systems/player.rs src/app.rs
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Add WASD movement system with velocity integration"
+```
+
+---
+
+## Task 9: Chunk lifecycle + naive blocky rendering (validates data flow)
+
+**Files:**
+- Modify: `src/systems/chunk_lifecycle.rs`, `src/systems/chunk_render.rs`, `src/app.rs`
+
+This task does NOT yet implement marching squares — it draws each solid tile as a colored square so we can verify Grid → on-screen pipeline before tackling contour meshing in Task 12.
+
+- [ ] **Step 1: Implement chunk lifecycle system**
+
+`src/systems/chunk_lifecycle.rs`:
+```rust
+use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
+use crate::components::{ChunkDirty, MainCamera, TerrainChunk};
+use crate::grid::Grid;
+use crate::systems::setup::TILE_SIZE_PX;
+
+pub const CHUNK_TILES: i32 = 16;
+pub const CHUNK_MARGIN: i32 = 1;
+
+pub fn chunk_lifecycle_system(
+    mut commands: Commands,
+    grid: Option<Res<Grid>>,
+    cam_q: Query<&Transform, With<MainCamera>>,
+    win_q: Query<&Window, With<PrimaryWindow>>,
+    chunks_q: Query<(Entity, &TerrainChunk)>,
+) {
+    let Some(grid) = grid else { return };
+    let Ok(cam) = cam_q.get_single() else { return };
+    let Ok(win) = win_q.get_single() else { return };
+
+    let half = Vec2::new(win.width(), win.height()) * 0.5;
+    let cam_pos = cam.translation.truncate();
+    let world_min = cam_pos - half;
+    let world_max = cam_pos + half;
+
+    // Y inverts between world (up-positive) and grid (down-positive), so
+    // world_min / world_max do NOT map to componentwise min/max in chunk
+    // space. Map both corners and normalize.
+    let c_a = world_to_chunk(world_min);
+    let c_b = world_to_chunk(world_max);
+    let chunk_min = c_a.min(c_b) - IVec2::splat(CHUNK_MARGIN);
+    let chunk_max = c_a.max(c_b) + IVec2::splat(CHUNK_MARGIN);
+
+    let mut want = std::collections::HashSet::new();
+    for cy in chunk_min.y..=chunk_max.y {
+        for cx in chunk_min.x..=chunk_max.x {
+            // skip chunks fully outside the grid
+            if cx * CHUNK_TILES >= grid.width() as i32 { continue; }
+            if cy * CHUNK_TILES >= grid.height() as i32 { continue; }
+            if (cx + 1) * CHUNK_TILES <= 0 { continue; }
+            if (cy + 1) * CHUNK_TILES <= 0 { continue; }
+            want.insert(IVec2::new(cx, cy));
+        }
+    }
+
+    let existing: std::collections::HashMap<IVec2, Entity> = chunks_q
+        .iter()
+        .map(|(e, c)| (c.coord, e))
+        .collect();
+
+    for coord in &want {
+        if !existing.contains_key(coord) {
+            commands.spawn((
+                TerrainChunk { coord: *coord },
+                ChunkDirty,
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Visibility::default(),
+            ));
+        }
+    }
+    for (coord, entity) in &existing {
+        if !want.contains(coord) {
+            commands.entity(*entity).despawn_recursive();
+        }
+    }
+}
+
+fn world_to_chunk(world: Vec2) -> IVec2 {
+    let tx = (world.x / TILE_SIZE_PX).floor() as i32;
+    // game Y inverts; underground tiles have larger y, in world they have negative y
+    let ty = (-world.y / TILE_SIZE_PX).floor() as i32;
+    IVec2::new(tx.div_euclid(CHUNK_TILES), ty.div_euclid(CHUNK_TILES))
+}
+```
+
+- [ ] **Step 2: Implement naive chunk render system**
+
+`src/systems/chunk_render.rs`:
+```rust
+use bevy::prelude::*;
+use crate::components::{ChunkDirty, TerrainChunk};
+use crate::grid::{Grid, Layer, OreType};
+use crate::systems::setup::TILE_SIZE_PX;
+use crate::systems::chunk_lifecycle::CHUNK_TILES;
+
+fn layer_color(l: Layer) -> Color {
+    match l {
+        Layer::Dirt    => Color::srgb(0.55, 0.42, 0.27),
+        Layer::Stone   => Color::srgb(0.42, 0.33, 0.22),
+        Layer::Deep    => Color::srgb(0.29, 0.23, 0.15),
+        Layer::Bedrock => Color::srgb(0.16, 0.13, 0.10),
+    }
+}
+
+fn ore_color(o: OreType) -> Option<Color> {
+    match o {
+        OreType::None   => None,
+        OreType::Copper => Some(Color::srgb(0.85, 0.45, 0.20)),
+        OreType::Silver => Some(Color::srgb(0.85, 0.85, 0.92)),
+        OreType::Gold   => Some(Color::srgb(0.95, 0.78, 0.25)),
+    }
+}
+
+pub fn chunk_remesh_system(
+    mut commands: Commands,
+    grid: Option<Res<Grid>>,
+    dirty_q: Query<(Entity, &TerrainChunk), With<ChunkDirty>>,
+    children_q: Query<&Children>,
+) {
+    let Some(grid) = grid else { return };
+    for (entity, chunk) in dirty_q.iter() {
+        // despawn previous children (tile sprites + ore sprites)
+        if let Ok(children) = children_q.get(entity) {
+            for c in children.iter() {
+                commands.entity(*c).despawn_recursive();
+            }
+        }
+
+        commands.entity(entity).with_children(|parent| {
+            for ly in 0..CHUNK_TILES {
+                for lx in 0..CHUNK_TILES {
+                    let gx = chunk.coord.x * CHUNK_TILES + lx;
+                    let gy = chunk.coord.y * CHUNK_TILES + ly;
+                    let Some(t) = grid.get(gx, gy) else { continue };
+                    if !t.solid { continue }
+
+                    let world_x = gx as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0;
+                    let world_y = -(gy as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0);
+
+                    parent.spawn((
+                        Sprite {
+                            color: layer_color(t.layer),
+                            custom_size: Some(Vec2::splat(TILE_SIZE_PX)),
+                            ..default()
+                        },
+                        Transform::from_translation(Vec3::new(world_x, world_y, 0.0)),
+                    ));
+
+                    if let Some(c) = ore_color(t.ore) {
+                        parent.spawn((
+                            Sprite {
+                                color: c,
+                                custom_size: Some(Vec2::splat(TILE_SIZE_PX * 0.5)),
+                                ..default()
+                            },
+                            Transform::from_translation(Vec3::new(world_x, world_y, 0.5)),
+                        ));
+                    }
+                }
+            }
+        });
+
+        commands.entity(entity).remove::<ChunkDirty>();
+    }
+}
+```
+
+- [ ] **Step 3: Register systems in plugin**
+
+Update `src/app.rs`:
+```rust
+use bevy::prelude::*;
+use crate::systems::{camera, chunk_lifecycle, chunk_render, player, setup};
+
+pub struct MiningSimPlugin;
+
+impl Plugin for MiningSimPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, setup::setup_world)
+            .add_systems(Update, (
+                player::read_input_system,
+                player::apply_velocity_system,
+                chunk_lifecycle::chunk_lifecycle_system,
+                chunk_render::chunk_remesh_system,
+                camera::camera_follow_system,
+            ).chain());
+    }
+}
+```
+
+- [ ] **Step 4: Smoke-test**
+
+```bash
+cargo run
+```
+Expected: blue player sits at the surface; below and around are colored tile bands (dirt brown, stone darker, deep darkest, bedrock near-black) with small dot ores. WASD moves player and the world chunks update around the camera.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/terrain/terrain_chunk.gd
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Render terrain with marching-squares contour"
+git add src/systems/chunk_lifecycle.rs src/systems/chunk_render.rs src/app.rs
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Add chunk lifecycle + naive per-tile rendering"
 ```
 
 ---
 
-## Task 14: Manual sandbox scene
+## Task 10: Player AABB collision against the Grid
 
 **Files:**
-- Create: `tests/manual/dig_sandbox.tscn`
-- Create: `tests/manual/dig_sandbox.gd`
+- Modify: `src/systems/player.rs`, `src/app.rs`
 
-- [ ] **Step 1: Build sandbox scene**
+- [ ] **Step 1: Add collision resolution**
 
-Duplicate `scenes/main.tscn` to `tests/manual/dig_sandbox.tscn`. Attach `tests/manual/dig_sandbox.gd` to its root, replacing main's script.
+Append to `src/systems/player.rs`:
+```rust
+use crate::grid::Grid;
+use crate::systems::setup::TILE_SIZE_PX;
 
-- [ ] **Step 2: Implement sandbox script**
+pub const PLAYER_HALF: f32 = 6.0; // 12px sprite
 
-```gdscript
-extends Node2D
+pub fn collide_player_with_grid_system(
+    grid: Option<Res<Grid>>,
+    mut q: Query<&mut Transform, With<Player>>,
+) {
+    let Some(grid) = grid else { return };
+    let Ok(mut t) = q.get_single_mut() else { return };
 
-const Inventory = preload("res://scripts/items/inventory.gd")
-const TerrainGen = preload("res://scripts/terrain/terrain_gen.gd")
+    // Resolve X then Y. Player AABB is [pos.xy ± PLAYER_HALF].
+    // Convert world to tile coords. World y is negative-down; tile y is positive-down.
+    for axis in [0u8, 1u8] {
+        let p = t.translation;
+        let min = Vec2::new(p.x - PLAYER_HALF, p.y - PLAYER_HALF);
+        let max = Vec2::new(p.x + PLAYER_HALF, p.y + PLAYER_HALF);
 
-@onready var _terrain = $World/Terrain
-@onready var _player  = $World/Player
-@onready var _camera: Camera2D = $Camera2D
-@onready var _hud_panel = $HUD/InventoryPanel
+        // tile range overlapping the AABB
+        let tx0 = (min.x / TILE_SIZE_PX).floor() as i32;
+        let tx1 = (max.x / TILE_SIZE_PX).floor() as i32;
+        let ty0 = ((-max.y) / TILE_SIZE_PX).floor() as i32;
+        let ty1 = ((-min.y) / TILE_SIZE_PX).floor() as i32;
 
-func _ready() -> void:
-    # Tiny fixed-seed map for fast iteration on dig feel
-    var grid = TerrainGen.generate(20, 20, 1)
-    _terrain.set_grid(grid)
-    var inv = Inventory.new()
-    _player.set_inventory(inv)
-    _hud_panel.bind(inv)
-    var sp = TerrainGen.spawn_tile(grid)
-    _player.global_position = _terrain.tile_to_world(sp)
-    _camera.global_position = _player.global_position
+        for ty in ty0..=ty1 {
+            for tx in tx0..=tx1 {
+                let Some(tile) = grid.get(tx, ty) else { continue };
+                if !tile.solid { continue }
+                let tw_min = Vec2::new(
+                    tx as f32 * TILE_SIZE_PX,
+                    -((ty + 1) as f32) * TILE_SIZE_PX,
+                );
+                let tw_max = Vec2::new(
+                    (tx + 1) as f32 * TILE_SIZE_PX,
+                    -(ty as f32) * TILE_SIZE_PX,
+                );
+                let overlap_x = (max.x.min(tw_max.x)) - (min.x.max(tw_min.x));
+                let overlap_y = (max.y.min(tw_max.y)) - (min.y.max(tw_min.y));
+                if overlap_x <= 0.0 || overlap_y <= 0.0 { continue }
+                if axis == 0 {
+                    // push out along X
+                    if t.translation.x < (tw_min.x + tw_max.x) * 0.5 {
+                        t.translation.x -= overlap_x;
+                    } else {
+                        t.translation.x += overlap_x;
+                    }
+                } else {
+                    if t.translation.y < (tw_min.y + tw_max.y) * 0.5 {
+                        t.translation.y -= overlap_y;
+                    } else {
+                        t.translation.y += overlap_y;
+                    }
+                }
+            }
+        }
+    }
+}
 ```
 
-Use this scene for rapid dig-feel iteration without waiting on the full 80×200 map to remesh.
+- [ ] **Step 2: Register collision after movement**
 
-- [ ] **Step 3: Commit**
+Update `src/app.rs` Update chain:
+```rust
+.add_systems(Update, (
+    player::read_input_system,
+    player::apply_velocity_system,
+    player::collide_player_with_grid_system,
+    chunk_lifecycle::chunk_lifecycle_system,
+    chunk_render::chunk_remesh_system,
+    camera::camera_follow_system,
+).chain())
+```
+
+- [ ] **Step 3: Smoke-test**
 
 ```bash
-git add tests/manual/dig_sandbox.tscn tests/manual/dig_sandbox.gd
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Add tiny dig sandbox scene for feel iteration"
+cargo run
+```
+Expected: player can no longer walk through solid tiles. Player can walk freely along the surface strip and within the spawn pocket. Bedrock walls contain.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/systems/player.rs src/app.rs
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Add AABB-vs-grid collision resolution for player"
 ```
 
 ---
 
-## Task 15: Final manual playtest & milestone wrap
+## Task 11: Dig input + OreDrop entities + HUD
+
+**Files:**
+- Modify: `src/systems/player.rs`, `src/systems/ore_drop.rs`, `src/systems/hud.rs`, `src/systems/setup.rs`, `src/app.rs`
+
+This bundles dig input, drop entities, and HUD into one task because they form one indivisible playable loop and share the same smoke-test moment.
+
+- [ ] **Step 1: Add dig cooldown resource**
+
+In `src/systems/player.rs`, add:
+```rust
+use bevy::prelude::*;
+use crate::components::{Player, Velocity, OreDrop, ChunkDirty, TerrainChunk};
+use crate::dig::{self, DigStatus};
+use crate::grid::{Grid, OreType};
+use crate::inventory::Inventory;
+use crate::systems::setup::TILE_SIZE_PX;
+use crate::systems::chunk_lifecycle::CHUNK_TILES;
+use bevy::window::PrimaryWindow;
+
+#[derive(Resource)]
+pub struct DigCooldown(pub Timer);
+
+impl Default for DigCooldown {
+    fn default() -> Self {
+        Self(Timer::from_seconds(0.15, TimerMode::Once))
+    }
+}
+
+pub const DIG_REACH_TILES: f32 = 2.0;
+
+pub fn dig_input_system(
+    mut commands: Commands,
+    mouse: Res<ButtonInput<MouseButton>>,
+    win_q: Query<&Window, With<PrimaryWindow>>,
+    cam_q: Query<(&Camera, &GlobalTransform), With<crate::components::MainCamera>>,
+    player_q: Query<&Transform, With<Player>>,
+    mut grid: ResMut<Grid>,
+    mut cooldown: ResMut<DigCooldown>,
+    chunks_q: Query<(Entity, &TerrainChunk)>,
+    time: Res<Time>,
+) {
+    cooldown.0.tick(time.delta());
+    if !mouse.pressed(MouseButton::Left) { return; }
+    if !cooldown.0.finished() { return; }
+
+    let Ok(win) = win_q.get_single() else { return };
+    let Some(cursor_screen) = win.cursor_position() else { return };
+    let Ok((cam, cam_xf)) = cam_q.get_single() else { return };
+    let Ok(player_xf) = player_q.get_single() else { return };
+
+    let Ok(cursor_world) = cam.viewport_to_world_2d(cam_xf, cursor_screen) else { return };
+
+    let tx = (cursor_world.x / TILE_SIZE_PX).floor() as i32;
+    let ty = ((-cursor_world.y) / TILE_SIZE_PX).floor() as i32;
+    let tile_center = Vec2::new(
+        tx as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0,
+        -(ty as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0),
+    );
+    let dist_tiles =
+        (tile_center - player_xf.translation.truncate()).length() / TILE_SIZE_PX;
+    if dist_tiles > DIG_REACH_TILES { return; }
+
+    let result = dig::try_dig(&mut grid, tx, ty);
+    if result.status != DigStatus::Ok { return; }
+    // Cooldown gates only successful swings — failed clicks (out of reach,
+    // bedrock) shouldn't punish the player by stalling their next attempt.
+    cooldown.0.reset();
+
+    // mark owning chunk dirty
+    let chunk_coord = IVec2::new(tx.div_euclid(CHUNK_TILES), ty.div_euclid(CHUNK_TILES));
+    for (e, c) in chunks_q.iter() {
+        if c.coord == chunk_coord {
+            commands.entity(e).insert(ChunkDirty);
+            break;
+        }
+    }
+
+    // spawn ore drop
+    if result.ore != OreType::None {
+        let color = match result.ore {
+            OreType::Copper => Color::srgb(0.85, 0.45, 0.20),
+            OreType::Silver => Color::srgb(0.85, 0.85, 0.92),
+            OreType::Gold   => Color::srgb(0.95, 0.78, 0.25),
+            OreType::None   => Color::WHITE,
+        };
+        commands.spawn((
+            OreDrop { ore: result.ore },
+            Sprite {
+                color,
+                custom_size: Some(Vec2::splat(6.0)),
+                ..default()
+            },
+            Transform::from_translation(tile_center.extend(5.0)),
+        ));
+    }
+}
+```
+
+- [ ] **Step 2: Register DigCooldown resource in setup**
+
+Append to `setup_world` in `src/systems/setup.rs`:
+```rust
+commands.insert_resource(crate::systems::player::DigCooldown::default());
+```
+
+- [ ] **Step 3: Implement OreDrop vacuum + delivery**
+
+`src/systems/ore_drop.rs`:
+```rust
+use bevy::prelude::*;
+use crate::components::{OreDrop, Player};
+use crate::inventory::Inventory;
+use crate::systems::setup::TILE_SIZE_PX;
+
+pub const VACUUM_RADIUS_TILES: f32 = 1.0;
+pub const VACUUM_SPEED_PX_PER_S: f32 = 200.0;
+pub const PICKUP_DISTANCE_PX: f32 = 6.0;
+
+pub fn ore_drop_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    player_q: Query<&Transform, With<Player>>,
+    mut drops_q: Query<(Entity, &OreDrop, &mut Transform), Without<Player>>,
+    mut inv: ResMut<Inventory>,
+) {
+    let Ok(player_xf) = player_q.get_single() else { return };
+    let player_pos = player_xf.translation.truncate();
+
+    for (entity, drop, mut t) in drops_q.iter_mut() {
+        let to_player = player_pos - t.translation.truncate();
+        let dist = to_player.length();
+        if dist < PICKUP_DISTANCE_PX {
+            inv.add(drop.ore, 1);
+            commands.entity(entity).despawn();
+            continue;
+        }
+        if dist / TILE_SIZE_PX < VACUUM_RADIUS_TILES {
+            let step = to_player.normalize() * VACUUM_SPEED_PX_PER_S * time.delta_secs();
+            t.translation.x += step.x;
+            t.translation.y += step.y;
+        }
+    }
+}
+```
+
+- [ ] **Step 4: Implement HUD**
+
+`src/systems/hud.rs`:
+```rust
+use bevy::prelude::*;
+use crate::grid::OreType;
+use crate::inventory::Inventory;
+
+#[derive(Component)]
+pub struct OreCountText(pub OreType);
+
+pub fn setup_hud(mut commands: Commands) {
+    let make_row = |ore: OreType, color: Color| (
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            margin: UiRect::all(Val::Px(4.0)),
+            ..default()
+        },
+        children![
+            (
+                Node {
+                    width: Val::Px(16.0),
+                    height: Val::Px(16.0),
+                    margin: UiRect::right(Val::Px(8.0)),
+                    ..default()
+                },
+                BackgroundColor(color),
+            ),
+            (
+                Text::new("0"),
+                TextFont { font_size: 18.0, ..default() },
+                OreCountText(ore),
+            ),
+        ],
+    );
+
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(8.0),
+            left: Val::Px(8.0),
+            flex_direction: FlexDirection::Column,
+            ..default()
+        },
+        children![
+            make_row(OreType::Copper, Color::srgb(0.85, 0.45, 0.20)),
+            make_row(OreType::Silver, Color::srgb(0.85, 0.85, 0.92)),
+            make_row(OreType::Gold,   Color::srgb(0.95, 0.78, 0.25)),
+        ],
+    ));
+}
+
+pub fn update_hud_system(
+    inv: Res<Inventory>,
+    mut q: Query<(&mut Text, &OreCountText)>,
+) {
+    if !inv.is_changed() { return; }
+    for (mut text, marker) in q.iter_mut() {
+        **text = inv.get(marker.0).to_string();
+    }
+}
+```
+
+(Bevy 0.15's UI uses required components and `children![]` macro; older versions used `NodeBundle`/`TextBundle`. Adapt to current API.)
+
+- [ ] **Step 5: Wire all new systems**
+
+Update `src/app.rs`:
+```rust
+use bevy::prelude::*;
+use crate::systems::{camera, chunk_lifecycle, chunk_render, hud, ore_drop, player, setup};
+
+pub struct MiningSimPlugin;
+
+impl Plugin for MiningSimPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, (setup::setup_world, hud::setup_hud))
+            .add_systems(Update, (
+                player::read_input_system,
+                player::apply_velocity_system,
+                player::collide_player_with_grid_system,
+                player::dig_input_system,
+                ore_drop::ore_drop_system,
+                chunk_lifecycle::chunk_lifecycle_system,
+                chunk_render::chunk_remesh_system,
+                camera::camera_follow_system,
+                hud::update_hud_system,
+            ).chain());
+    }
+}
+```
+
+- [ ] **Step 6: Smoke-test the full loop**
+
+```bash
+cargo run
+```
+Expected:
+- Window opens, player on surface, banded layers below.
+- WASD moves; collision works; bedrock contains.
+- Click on adjacent solid tile within ~2 tiles → tile disappears.
+- Bedrock click → no change.
+- Ore tile click → small ore-colored drop appears at the tile center.
+- Walk near the drop (~1 tile away) → it lerps to player → vanishes.
+- HUD count for that ore increments.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/systems/
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Add dig input, ore drops with vacuum, and HUD inventory display"
+```
+
+---
+
+## Task 12: Marching-squares contour rendering
+
+Replace the per-tile rect renderer with a true marching-squares contour mesh per chunk. Done as a separate task so the previous milestone is already playable; if marching squares causes a regression, we revert just this commit and ship with the blocky placeholder.
+
+**Files:**
+- Modify: `src/marching_squares.rs`
+- Modify: `src/systems/chunk_render.rs`
+
+- [ ] **Step 1: Implement `marching_squares::build_chunk_mesh`**
+
+Standard marching-squares: for each cell (corner samples = 4 tile-corners), look up 1 of 16 cases. Each case adds 0–2 polygons to the interior region. Build a single `Mesh` with vertex colors per layer, or one mesh per layer for clarity.
+
+Module sketch:
+```rust
+use bevy::prelude::*;
+use bevy::render::mesh::{Indices, PrimitiveTopology};
+use bevy::render::render_asset::RenderAssetUsages;
+use crate::grid::{Grid, Layer};
+
+pub fn build_chunk_mesh(
+    grid: &Grid,
+    chunk_origin_tile: IVec2,
+    chunk_tiles: u32,
+    tile_size_px: f32,
+) -> Mesh {
+    // Sample corners across (chunk_tiles+1) x (chunk_tiles+1).
+    // For each cell of chunk_tiles x chunk_tiles, look up 16-case polygons.
+    // Emit triangle fan/strip per polygon. Color = layer of strongest corner.
+    // Detailed implementation derived from the standard marching-squares table.
+    todo!("implement marching squares lookup and mesh build")
+}
+```
+
+The detailed lookup table is well-known; engineer references e.g. https://en.wikipedia.org/wiki/Marching_squares . Keep the function under ~150 lines including the table.
+
+- [ ] **Step 2: Switch chunk_render to use the mesh**
+
+Replace the per-tile-sprite logic in `chunk_remesh_system` with:
+1. Call `build_chunk_mesh(...)`.
+2. Insert the resulting `Mesh` into `Assets<Mesh>`, get a `Handle<Mesh>`.
+3. Spawn a single `Mesh2d` child of the chunk entity with the handle and a `MeshMaterial2d<ColorMaterial>` (or vertex colors).
+4. Spawn ore sprites as separate children (these stay sprite-based — small dots at ore-tile centers).
+
+- [ ] **Step 3: Smoke-test**
+
+```bash
+cargo run
+```
+Expected: tile boundaries now show smoothed/curved edges instead of hard grid steps. Layer colors still correct. Ore dots still visible. Collision still based on per-tile AABB (so collision corners remain "boxy" around the smoothed visual — known minor compromise; acceptable for milestone 1).
+
+- [ ] **Step 4: If smooth contour breaks the prototype**
+
+Revert just this commit:
+```bash
+git revert HEAD --no-edit
+```
+The per-tile placeholder is good enough to answer "is digging fun?" The smoothness is polish, not a milestone gate. Document the revert in the commit message.
+
+- [ ] **Step 5: Commit (only if Step 3 looks correct)**
+
+```bash
+git add src/marching_squares.rs src/systems/chunk_render.rs
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Render terrain chunks with marching-squares contour mesh"
+```
+
+---
+
+## Task 13: Final manual playtest & milestone wrap
 
 - [ ] **Step 1: Run full unit suite**
 
 ```bash
-"$GODOT" --headless --path . -s res://addons/gut/gut_cmdln.gd -gdir=res://tests/unit -gexit
+cargo test
 ```
-Expected: all tests pass, exit 0.
+Expected: all tests pass.
 
-- [ ] **Step 2: Manual exit-criteria walkthrough on `scenes/main.tscn`**
+- [ ] **Step 2: Manual exit-criteria walkthrough**
 
-Run `main.tscn`. Tick each criterion only if observed:
-- [ ] Game loads, banded layers visible.
+Run `cargo run` and tick each criterion only if observed:
+- [ ] Game window opens, banded layers visible.
 - [ ] WASD movement and collision work.
 - [ ] Clicking an adjacent solid tile breaks it.
 - [ ] Bedrock cannot be broken.
@@ -1372,10 +1744,23 @@ git add docs/roadmap.md
 git commit --author="wes2000 <whannasch@gmail.com>" -m "Record milestone 1 playtest results"
 ```
 
-- [ ] **Step 5: Push to GitHub**
+- [ ] **Step 5: Open a PR for review (or merge directly to main if soloing)**
 
+If using GitHub PRs:
 ```bash
-git push origin main
+git push -u origin milestone-1
+gh pr create --title "Milestone 1: Core dig prototype" --body "$(cat <<'EOF'
+## Summary
+- Bevy 2D prototype with destructible terrain, WASD movement, click-to-dig, ore drops, HUD inventory.
+- All Task-3..5 pure-module tests pass via cargo test.
+
+## Test plan
+- [x] cargo test → all green
+- [x] cargo run → manual exit-criteria walkthrough complete
+EOF
+)"
 ```
+
+Otherwise merge `milestone-1` into `main` directly.
 
 Milestone 1 complete.
