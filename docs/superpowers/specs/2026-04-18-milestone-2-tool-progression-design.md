@@ -237,7 +237,7 @@ Added:
 
 ### `systems/shop_ui.rs` (new)
 
-- `spawn_shop_ui` (Startup, after HUD) — builds the panel as one `Node` root (`ShopUiRoot`) with `Visibility::Hidden`, children: money label, Sell All button, three tool rows (name + price + Buy button). Each button carries a `ShopButtonKind` component for dispatch.
+- `spawn_shop_ui` (Startup, ordered `.after(hud::setup_hud)` via a shared `SystemSet` to guarantee stable spawn order of UI roots) — builds the panel as one `Node` root (`ShopUiRoot`) with `Visibility::Hidden`, children: money label, Sell All button, three tool rows (name + price + Buy button). Each button carries a `ShopButtonKind` component for dispatch.
 - `sync_shop_visibility_system` (Update) — only runs on `Changed<ShopUiOpen>`; mirrors bool to `Visibility`.
 - `update_shop_labels_system` (Update) — runs on `Changed<Money> | Changed<OwnedTools>`; refreshes money text, button labels (`[Buy XX c]` → `[OWNED]`), and enables/disables button interactivity.
 - `handle_shop_buttons_system` (Update) — walks `Query<(&Interaction, &ShopButtonKind), Changed<Interaction>>`; on `Pressed`, dispatches `economy::sell_all` or `economy::try_buy` accordingly. Does nothing when the UI is hidden (defense-in-depth: Bevy does not send Interaction events for hidden UI, but guard anyway).
@@ -259,7 +259,7 @@ Added:
 When rebuilding a dirty chunk, for each solid tile:
 - (existing) spawn layer-color sprite.
 - (existing) spawn ore dot if `tile.ore != None`.
-- **NEW**: if `tile.damage > 0`, spawn a dark semi-transparent sprite (color: `Color::srgba(0.0, 0.0, 0.0, tile.damage as f32 * 0.2)`), same size as the tile, z slightly above the layer sprite.
+- **NEW**: if `tile.damage > 0`, spawn a dark semi-transparent sprite (color: `Color::srgba(0.0, 0.0, 0.0, tile.damage as f32 * 0.2)`), same size as the tile, z slightly above the layer sprite. Max possible alpha is 0.4 (damage=2, just before break); damage=3 would break the tile and clear it, so the overlay never reaches higher.
 
 ### `systems/hud.rs` (modified)
 
@@ -281,6 +281,12 @@ Register new systems in the Update chain after existing ones, roughly:
 `spawn_shop_ui` added to Startup set.
 
 ## Data flow
+
+> **Cooldown rule (applies to all dig paths below):** the 0.15 s dig cooldown
+> is reset only when `try_dig` returns `Broken` or `Damaged`. Every other
+> outcome (under-tier, bedrock, out-of-bounds, already-empty, cardinal/LoS
+> rejection) leaves the cooldown unchanged so failed clicks don't punish
+> the player. Restated per-step below for clarity.
 
 ### Dig (tool-aware, damaged)
 1. LMB/Space + cooldown finished → `dig_input_system`.
@@ -343,7 +349,7 @@ Unchanged from M1 plus:
 ### Headless unit tests
 
 - **`grid`** — add coverage for `Layer::Core`; `damage` default 0; round-trip `damage: u8` field through `set`/`get`.
-- **`terrain_gen`** — deepest band is `Layer::Core`; outer ring is `Layer::Bedrock`; no `Bedrock` in the interior (below the surface strip, before the Core band, and across Dirt/Stone/Deep).
+- **`terrain_gen`** — **update** the M1 `depth_layers_appear_in_order` test: the deepest-band assertion must flip from `Bedrock` to `Core`, and a new assertion should confirm the outer ring (boundary) is `Bedrock`. No `Bedrock` in the interior below the surface strip, across Dirt/Stone/Deep/Core bands. This is a behavior-flip, not an additive test — the existing assertion as written will fail under M2 terrain generation.
 - **`dig`** — extend with tool-aware tests and damage accumulation; add dedicated tests for `dig_target_valid` (cardinal, reach, LoS cases).
 - **`tools`** — `tool_tier`, `layer_tier`, `clicks_required` full matrix, `best_applicable_tool` (None / strongest-wins / respects Bedrock).
 - **`economy`** — `ore_sell_price`, `tool_buy_price`, `sell_all` (mixed inventory round-trip), `try_buy` (Ok / NotEnoughMoney / AlreadyOwned / exact-cost).
@@ -365,7 +371,7 @@ Consistent with M1 policy. Visual / interactive behavior is validated by manual 
 - [ ] Sell All converts all ore to coins; HUD coin counter updates.
 - [ ] Buy Pickaxe at 30c; pickaxe row shows `[OWNED]`; mining dirt now 2 strikes, stone now 3.
 - [ ] Buy Jackhammer; dirt 1 strike, stone 2, deep 3.
-- [ ] Buy Dynamite; deep 2, core 1 (wait — dynamite +0 over core = 3; +1 over deep = 2; +2 over stone = 1. Confirm math in playtest notes).
+- [ ] Buy Dynamite; Core at-tier → 3 strikes; Deep (gap +1) → 2; Stone (gap +2) → 1; Dirt (gap +3, capped) → 1. (Formula: `3 - (tool_tier - layer_tier).min(2)`.)
 - [ ] Break through Core to map floor; Bedrock boundary ring remains unbreakable.
 - [ ] Current-tool indicator updates when the strongest owned tool changes.
 - [ ] Partial damage persists when walking away and returning.
