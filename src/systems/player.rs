@@ -111,6 +111,7 @@ pub fn dig_input_system(
     mut grid: ResMut<Grid>,
     mut cooldown: ResMut<DigCooldown>,
     chunks_q: Query<(Entity, &TerrainChunk)>,
+    owned_tools: Res<crate::tools::OwnedTools>,
     time: Res<Time>,
 ) {
     cooldown.0.tick(time.delta());
@@ -122,7 +123,6 @@ pub fn dig_input_system(
     let Some(cursor_screen) = win.cursor_position() else { return };
     let Ok((cam, cam_xf)) = cam_q.get_single() else { return };
     let Ok(player_xf) = player_q.get_single() else { return };
-
     let Ok(cursor_world) = cam.viewport_to_world_2d(cam_xf, cursor_screen) else { return };
 
     let tx = (cursor_world.x / TILE_SIZE_PX).floor() as i32;
@@ -132,56 +132,48 @@ pub fn dig_input_system(
         -(ty as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0),
     );
 
-    // Cardinal-only dig: the target tile must be directly N/E/S/W of the
-    // player's tile, within reach. Diagonal clicks are rejected — they
-    // produced visually-messy diagonal tunnels that the player could get
-    // wedged on.
     let player_tile = IVec2::new(
         (player_xf.translation.x / TILE_SIZE_PX).floor() as i32,
         ((-player_xf.translation.y) / TILE_SIZE_PX).floor() as i32,
     );
     let target_tile = IVec2::new(tx, ty);
-    let delta = target_tile - player_tile;
     let reach = DIG_REACH_TILES as i32;
-    let is_cardinal = (delta.x == 0) ^ (delta.y == 0);
-    let within_reach = delta.x.abs() <= reach && delta.y.abs() <= reach;
-    if !is_cardinal || !within_reach { return; }
 
-    // Block mining through walls: every tile BETWEEN the player and the
-    // target must already be non-solid. Without this, reach=2 lets you
-    // pick tiles behind the adjacent wall.
-    let step = IVec2::new(delta.x.signum(), delta.y.signum());
-    let mut probe = player_tile + step;
-    while probe != target_tile {
-        if grid.get(probe.x, probe.y).map_or(false, |t| t.solid) { return; }
-        probe += step;
-    }
+    // Cardinal + reach + line-of-sight gate. No cooldown reset on rejection.
+    if !dig::dig_target_valid(player_tile, target_tile, reach, &grid) { return; }
 
-    let result = dig::try_dig(&mut grid, bevy::prelude::IVec2::new(tx, ty), crate::tools::Tool::Shovel);
-    if result.status != DigStatus::Broken { return; }
-    // Cooldown gates only successful swings — failed clicks (out of reach,
-    // bedrock) shouldn't punish the player by stalling their next attempt.
-    cooldown.0.reset();
+    // Look up tile layer to pick the best tool.
+    let Some(tile) = grid.get(tx, ty).copied() else { return; };
+    let Some(tool) = crate::tools::best_applicable_tool(&owned_tools, tile.layer) else {
+        // Player owns nothing that can break this layer. Clunk; no cooldown reset.
+        return;
+    };
 
-    // mark owning chunk dirty
-    let chunk_coord = IVec2::new(tx.div_euclid(CHUNK_TILES), ty.div_euclid(CHUNK_TILES));
-    for (e, c) in chunks_q.iter() {
-        if c.coord == chunk_coord {
-            commands.entity(e).insert(ChunkDirty);
-            break;
+    let result = dig::try_dig(&mut grid, target_tile, tool);
+    match result.status {
+        DigStatus::Broken | DigStatus::Damaged => {
+            cooldown.0.reset();
+            // Mark owning chunk dirty.
+            let chunk_coord = IVec2::new(tx.div_euclid(CHUNK_TILES), ty.div_euclid(CHUNK_TILES));
+            for (e, c) in chunks_q.iter() {
+                if c.coord == chunk_coord {
+                    commands.entity(e).insert(ChunkDirty);
+                    break;
+                }
+            }
+            // Spawn ore drop only on full break.
+            if result.status == DigStatus::Broken && result.ore != OreType::None {
+                commands.spawn((
+                    OreDrop { ore: result.ore },
+                    Sprite {
+                        color: ore_visual_color(result.ore),
+                        custom_size: Some(Vec2::splat(6.0)),
+                        ..default()
+                    },
+                    Transform::from_translation(tile_center.extend(5.0)),
+                ));
+            }
         }
-    }
-
-    // spawn ore drop
-    if result.ore != OreType::None {
-        commands.spawn((
-            OreDrop { ore: result.ore },
-            Sprite {
-                color: ore_visual_color(result.ore),
-                custom_size: Some(Vec2::splat(6.0)),
-                ..default()
-            },
-            Transform::from_translation(tile_center.extend(5.0)),
-        ));
+        _ => { /* OutOfBounds / AlreadyEmpty / UnderTier / Blocked — no cooldown reset */ }
     }
 }
