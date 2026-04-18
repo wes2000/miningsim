@@ -1,13 +1,17 @@
 use bevy::prelude::*;
 use crate::components::{MainCamera, Player, Velocity};
 use crate::inventory::Inventory;
+use crate::systems::chunk_render::ChunkMaterial;
 use crate::terrain_gen;
 
 pub const TILE_SIZE_PX: f32 = 16.0;
 pub const MAP_W: u32 = 80;
 pub const MAP_H: u32 = 200;
 
-pub fn setup_world(mut commands: Commands) {
+pub fn setup_world(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
     let seed: u64 = rand::random();
     info!("world seed: {}", seed);     // logged so playtests can be reproduced
     let grid = terrain_gen::generate(MAP_W, MAP_H, seed);
@@ -17,6 +21,7 @@ pub fn setup_world(mut commands: Commands) {
     commands.insert_resource(grid);
     commands.insert_resource(Inventory::default());
     commands.insert_resource(crate::systems::player::DigCooldown::default());
+    commands.insert_resource(ChunkMaterial(materials.add(ColorMaterial::default())));
 
     // Player
     commands.spawn((
