@@ -3,7 +3,8 @@ pub enum Layer {
     Dirt,
     Stone,
     Deep,
-    Bedrock,
+    Core,     // NEW — deepest diggable band (Dynamite-only)
+    Bedrock,  // map boundary, never breakable
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -19,11 +20,12 @@ pub struct Tile {
     pub solid: bool,
     pub layer: Layer,
     pub ore: OreType,
+    pub damage: u8,  // strikes accumulated; 0 on fresh / broken tile
 }
 
 impl Default for Tile {
     fn default() -> Self {
-        Self { solid: true, layer: Layer::Dirt, ore: OreType::None }
+        Self { solid: true, layer: Layer::Dirt, ore: OreType::None, damage: 0 }
     }
 }
 

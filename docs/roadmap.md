@@ -202,6 +202,60 @@ inventory, the session runs without crashes.
   line-of-sight gate makes reach = 2 meaningful only when mining into an
   already-open corridor; most practical digs are adjacent anyway.
 
+## Playtest Results — Milestone 2 (2026-04-18)
+
+Exit-criteria met: tool progression Shovel → Pickaxe → Jackhammer →
+Dynamite all unlock cleanly through the on-surface shop; tile damage
+overlay reads correctly across the 1/2/3-strike gradient; Core (the new
+deepest band) only breaks under Dynamite; bedrock boundary remains
+unbreakable. Click-or-spacebar dig, sell-all + buy-tool loop, money +
+current-tool HUD rows all functioning.
+
+**What felt good:**
+- "Barely scratch → tear through" lands. Each tool purchase produces a
+  visible drop in clicks-per-tile across already-accessible layers, in
+  addition to opening up the next layer. The progression arc reads.
+- Auto-tool selection (no manual switching) keeps the controls identical
+  to M1 — the player never has to think about which tool to wield.
+- The shop UI's binary `Buy ... → OWNED` state is enough for M2; no need
+  for confirmation dialogs or refund flows.
+
+**What felt off (and was fixed mid-playtest):**
+- Mouse-only dig made hold-to-dig feel awkward when the cursor drifted.
+  **Added spacebar-dig that targets the tile in front of the player**
+  (facing direction, snapped to dominant WASD axis). Mouse still aims
+  with cursor; mouse wins if both are held.
+- Walking vertically into a ceiling tile produced a sideways shove of
+  ~12 px because the X-axis collision pass would fire for any tile that
+  overlapped both axes. **Switched to minimum-translation-vector
+  resolution** — each axis pass only resolves tiles whose overlap on
+  that axis is the smaller one. Movement now feels clean in all
+  directions.
+
+**Decisions for milestone 3:**
+- Save/load lands in M3 (per roadmap). Money, OwnedTools, Inventory, and
+  the Grid (with damage state) all need to be serializable. The pure-data
+  modules already make this trivial — Inventory and Money are HashMaps /
+  scalars; Grid is a Vec<Tile>; OwnedTools is a HashSet<Tool>. Plan to
+  use serde + ron or json; revisit when we get there.
+- The five Bevy systems wired between dig and ore_drop are starting to
+  add up — twelve in the Update chain now. M3 will add machine systems;
+  consider grouping into named SystemSets (e.g. `InputSet`, `WorldSet`,
+  `UiSet`) before the chain becomes unreadable.
+- The HUD's per-row spawn code in `setup_hud` is mildly duplicated across
+  ore-rows and the new Money / CurrentTool rows. A single helper
+  `spawn_status_row(parent, swatch_color, label_text, marker)` would
+  dedupe ~30 lines. Cosmetic; do when M3 adds more rows.
+- `OreType::None` keeps appearing in match arms with `unreachable!()` /
+  `Color::WHITE` fallbacks. The reviewer flagged this in M2's
+  components review as a real type-smell — recommend revisiting in M3
+  with `Tile { ore: Option<OreKind> }` so `OreSprite`/`OreDrop` cannot
+  hold the sentinel variant. Touches grid, dig, inventory, terrain_gen,
+  hud, player, chunk_render — sizeable refactor but mechanical.
+- Dig SFX/VFX still missing (carry-over from M1 playtest notes). Tool
+  upgrades amplify the felt absence — a pickaxe should sound different
+  from a shovel. Pencil in for M7 polish unless it bothers us during M3.
+
 ## What This Document Is Not
 
 - Not a spec. Specs live in `docs/superpowers/specs/` and are per-milestone.

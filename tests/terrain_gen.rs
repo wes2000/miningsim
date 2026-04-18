@@ -36,7 +36,22 @@ fn depth_layers_appear_in_order() {
     let g = terrain_gen::generate(40, 200, 1);
     assert_eq!(g.get(20, 10).unwrap().layer, Layer::Dirt);
     assert_eq!(g.get(20, 80).unwrap().layer, Layer::Stone);
-    assert_eq!(g.get(20, 160).unwrap().layer, Layer::Deep);
+    assert_eq!(g.get(20, 140).unwrap().layer, Layer::Deep);
+    assert_eq!(g.get(20, 195).unwrap().layer, Layer::Core);
+}
+
+#[test]
+fn interior_has_no_bedrock() {
+    let g = terrain_gen::generate(40, 200, 1);
+    for y in 1..(g.height() as i32 - 1) {
+        for x in 1..(g.width() as i32 - 1) {
+            assert_ne!(
+                g.get(x, y).unwrap().layer,
+                Layer::Bedrock,
+                "interior tile ({},{}) should not be Bedrock", x, y
+            );
+        }
+    }
 }
 
 #[test]

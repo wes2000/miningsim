@@ -1,9 +1,10 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use crate::components::{ChunkDirty, OreDrop, Player, TerrainChunk, Velocity};
+use crate::components::{ChunkDirty, Facing, OreDrop, Player, TerrainChunk, Velocity};
 use crate::dig::{self, DigStatus};
 use crate::grid::{Grid, OreType};
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
+use crate::systems::hud::ore_visual_color;
 use crate::systems::setup::TILE_SIZE_PX;
 
 #[derive(Resource)]
@@ -22,16 +23,33 @@ pub const PLAYER_HALF: f32 = 6.0; // 12px sprite
 
 pub fn read_input_system(
     keys: Res<ButtonInput<KeyCode>>,
-    mut q: Query<&mut Velocity, With<Player>>,
+    mut q: Query<(&mut Velocity, &mut Facing), With<Player>>,
 ) {
     let mut dir = Vec2::ZERO;
     if keys.pressed(KeyCode::KeyW) { dir.y += 1.0; }
     if keys.pressed(KeyCode::KeyS) { dir.y -= 1.0; }
     if keys.pressed(KeyCode::KeyA) { dir.x -= 1.0; }
     if keys.pressed(KeyCode::KeyD) { dir.x += 1.0; }
-    if dir != Vec2::ZERO { dir = dir.normalize(); }
-    for mut v in q.iter_mut() {
-        v.0 = dir * PLAYER_SPEED_PX_PER_S;
+
+    // Snap facing to dominant input axis (tile space: +y = deeper).
+    // World y is up-positive, tile y is down-positive — invert when mapping.
+    let new_facing: Option<IVec2> = if dir == Vec2::ZERO {
+        None
+    } else if dir.y.abs() >= dir.x.abs() {
+        Some(IVec2::new(0, if dir.y > 0.0 { -1 } else { 1 }))
+    } else {
+        Some(IVec2::new(if dir.x > 0.0 { 1 } else { -1 }, 0))
+    };
+
+    let velocity = if dir != Vec2::ZERO {
+        dir.normalize() * PLAYER_SPEED_PX_PER_S
+    } else {
+        Vec2::ZERO
+    };
+
+    for (mut v, mut f) in q.iter_mut() {
+        v.0 = velocity;
+        if let Some(nf) = new_facing { f.0 = nf; }
     }
 }
 
@@ -81,7 +99,12 @@ pub fn collide_player_with_grid_system(
                 let overlap_x = (max.x.min(tw_max.x)) - (min.x.max(tw_min.x));
                 let overlap_y = (max.y.min(tw_max.y)) - (min.y.max(tw_min.y));
                 if overlap_x <= 0.0 || overlap_y <= 0.0 { continue }
+                // Resolve along the AXIS WITH THE SMALLER OVERLAP (minimum
+                // translation vector). Without this guard, walking vertically
+                // into a wall would also push horizontally by the player's
+                // full width, which felt like sideways bounce-back.
                 if axis == 0 {
+                    if overlap_x > overlap_y { continue; }
                     // push out along X
                     if t.translation.x < (tw_min.x + tw_max.x) * 0.5 {
                         t.translation.x -= overlap_x;
@@ -89,6 +112,7 @@ pub fn collide_player_with_grid_system(
                         t.translation.x += overlap_x;
                     }
                 } else {
+                    if overlap_y > overlap_x { continue; }
                     if t.translation.y < (tw_min.y + tw_max.y) * 0.5 {
                         t.translation.y -= overlap_y;
                     } else {
@@ -106,87 +130,87 @@ pub fn dig_input_system(
     keys: Res<ButtonInput<KeyCode>>,
     win_q: Query<&Window, With<PrimaryWindow>>,
     cam_q: Query<(&Camera, &GlobalTransform), With<crate::components::MainCamera>>,
-    player_q: Query<&Transform, With<Player>>,
+    player_q: Query<(&Transform, &Facing), With<Player>>,
     mut grid: ResMut<Grid>,
     mut cooldown: ResMut<DigCooldown>,
     chunks_q: Query<(Entity, &TerrainChunk)>,
+    owned_tools: Res<crate::tools::OwnedTools>,
     time: Res<Time>,
 ) {
     cooldown.0.tick(time.delta());
-    let dig_held = mouse.pressed(MouseButton::Left) || keys.pressed(KeyCode::Space);
-    if !dig_held { return; }
+
+    // Two trigger paths. Mouse wins if both are held (more specific aim).
+    let mouse_held = mouse.pressed(MouseButton::Left);
+    let space_held = keys.pressed(KeyCode::Space);
+    if !mouse_held && !space_held { return; }
     if !cooldown.0.finished() { return; }
 
-    let Ok(win) = win_q.get_single() else { return };
-    let Some(cursor_screen) = win.cursor_position() else { return };
-    let Ok((cam, cam_xf)) = cam_q.get_single() else { return };
-    let Ok(player_xf) = player_q.get_single() else { return };
-
-    let Ok(cursor_world) = cam.viewport_to_world_2d(cam_xf, cursor_screen) else { return };
-
-    let tx = (cursor_world.x / TILE_SIZE_PX).floor() as i32;
-    let ty = ((-cursor_world.y) / TILE_SIZE_PX).floor() as i32;
-    let tile_center = Vec2::new(
-        tx as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0,
-        -(ty as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0),
-    );
-
-    // Cardinal-only dig: the target tile must be directly N/E/S/W of the
-    // player's tile, within reach. Diagonal clicks are rejected — they
-    // produced visually-messy diagonal tunnels that the player could get
-    // wedged on.
+    let Ok((player_xf, facing)) = player_q.get_single() else { return };
     let player_tile = IVec2::new(
         (player_xf.translation.x / TILE_SIZE_PX).floor() as i32,
         ((-player_xf.translation.y) / TILE_SIZE_PX).floor() as i32,
     );
-    let target_tile = IVec2::new(tx, ty);
-    let delta = target_tile - player_tile;
+
+    // Target tile depends on which trigger fired. Mouse takes precedence.
+    let target_tile = if mouse_held {
+        let Ok(win) = win_q.get_single() else { return };
+        let Some(cursor_screen) = win.cursor_position() else { return };
+        let Ok((cam, cam_xf)) = cam_q.get_single() else { return };
+        let Ok(cursor_world) = cam.viewport_to_world_2d(cam_xf, cursor_screen) else { return };
+        let tx = (cursor_world.x / TILE_SIZE_PX).floor() as i32;
+        let ty = ((-cursor_world.y) / TILE_SIZE_PX).floor() as i32;
+        IVec2::new(tx, ty)
+    } else {
+        // Spacebar: dig the tile immediately in front of the player, in the
+        // current facing direction (set by the last WASD press).
+        player_tile + facing.0
+    };
+
+    let tile_center = Vec2::new(
+        target_tile.x as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0,
+        -(target_tile.y as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0),
+    );
+
     let reach = DIG_REACH_TILES as i32;
-    let is_cardinal = (delta.x == 0) ^ (delta.y == 0);
-    let within_reach = delta.x.abs() <= reach && delta.y.abs() <= reach;
-    if !is_cardinal || !within_reach { return; }
 
-    // Block mining through walls: every tile BETWEEN the player and the
-    // target must already be non-solid. Without this, reach=2 lets you
-    // pick tiles behind the adjacent wall.
-    let step = IVec2::new(delta.x.signum(), delta.y.signum());
-    let mut probe = player_tile + step;
-    while probe != target_tile {
-        if grid.get(probe.x, probe.y).map_or(false, |t| t.solid) { return; }
-        probe += step;
-    }
+    // Cardinal + reach + line-of-sight gate. No cooldown reset on rejection.
+    if !dig::dig_target_valid(player_tile, target_tile, reach, &grid) { return; }
 
-    let result = dig::try_dig(&mut grid, tx, ty);
-    if result.status != DigStatus::Ok { return; }
-    // Cooldown gates only successful swings — failed clicks (out of reach,
-    // bedrock) shouldn't punish the player by stalling their next attempt.
-    cooldown.0.reset();
+    // Look up tile layer to pick the best tool.
+    let Some(tile) = grid.get(target_tile.x, target_tile.y).copied() else { return; };
+    let Some(tool) = crate::tools::best_applicable_tool(&owned_tools, tile.layer) else {
+        // Player owns nothing that can break this layer. Clunk; no cooldown reset.
+        return;
+    };
 
-    // mark owning chunk dirty
-    let chunk_coord = IVec2::new(tx.div_euclid(CHUNK_TILES), ty.div_euclid(CHUNK_TILES));
-    for (e, c) in chunks_q.iter() {
-        if c.coord == chunk_coord {
-            commands.entity(e).insert(ChunkDirty);
-            break;
+    let result = dig::try_dig(&mut grid, target_tile, tool);
+    match result.status {
+        DigStatus::Broken | DigStatus::Damaged => {
+            cooldown.0.reset();
+            // Mark owning chunk dirty.
+            let chunk_coord = IVec2::new(
+                target_tile.x.div_euclid(CHUNK_TILES),
+                target_tile.y.div_euclid(CHUNK_TILES),
+            );
+            for (e, c) in chunks_q.iter() {
+                if c.coord == chunk_coord {
+                    commands.entity(e).insert(ChunkDirty);
+                    break;
+                }
+            }
+            // Spawn ore drop only on full break.
+            if result.status == DigStatus::Broken && result.ore != OreType::None {
+                commands.spawn((
+                    OreDrop { ore: result.ore },
+                    Sprite {
+                        color: ore_visual_color(result.ore),
+                        custom_size: Some(Vec2::splat(6.0)),
+                        ..default()
+                    },
+                    Transform::from_translation(tile_center.extend(5.0)),
+                ));
+            }
         }
-    }
-
-    // spawn ore drop
-    if result.ore != OreType::None {
-        let color = match result.ore {
-            OreType::Copper => Color::srgb(0.85, 0.45, 0.20),
-            OreType::Silver => Color::srgb(0.85, 0.85, 0.92),
-            OreType::Gold   => Color::srgb(0.95, 0.78, 0.25),
-            OreType::None   => Color::WHITE,
-        };
-        commands.spawn((
-            OreDrop { ore: result.ore },
-            Sprite {
-                color,
-                custom_size: Some(Vec2::splat(6.0)),
-                ..default()
-            },
-            Transform::from_translation(tile_center.extend(5.0)),
-        ));
+        _ => { /* OutOfBounds / AlreadyEmpty / UnderTier / Blocked — no cooldown reset */ }
     }
 }
