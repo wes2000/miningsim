@@ -80,20 +80,24 @@ fn player_entity_for_client(
         .find_map(|(e, owning)| (owning.0 == client_entity).then_some(e))
 }
 
+// TODO(Task 12): clients receive Grid mutations via replication but no
+// system re-marks ChunkDirty on Grid change there — remote peers won't see
+// dig results visually until that's wired up.
 pub fn handle_dig_requests(
     mut events: EventReader<FromClient<DigRequest>>,
     grid: Single<&mut Grid>,
     mut commands: Commands,
-    player_q: Query<(Entity, &OwningClient), With<Player>>,
-    player_data_q: Query<(&Transform, &OwnedTools), With<Player>>,
+    player_q: Query<(Entity, &OwningClient, &Transform, &OwnedTools), With<Player>>,
     chunks_q: Query<(Entity, &TerrainChunk)>,
 ) {
     let mut grid = grid.into_inner();
     for FromClient { client_entity, event } in events.read() {
-        let Some(player_entity) = player_entity_for_client(*client_entity, &player_q) else {
+        let Some((_, _, player_xf, owned)) = player_q
+            .iter()
+            .find(|(_, owning, _, _)| owning.0 == *client_entity)
+        else {
             continue;
         };
-        let Ok((player_xf, owned)) = player_data_q.get(player_entity) else { continue };
 
         let player_tile = world_to_tile(player_xf.translation.truncate());
         if !dig::dig_target_valid(player_tile, event.target, DIG_REACH_TILES as i32, &grid) {
@@ -103,41 +107,33 @@ pub fn handle_dig_requests(
         let Some(tool) = tools::best_applicable_tool(owned, tile.layer) else { continue };
 
         let result = dig::try_dig(&mut grid, event.target, tool);
-        match result.status {
-            DigStatus::Broken | DigStatus::Damaged => {
-                // Mark owning chunk dirty for the host's re-mesh. NOTE:
-                // remote clients receive the new Grid via replication but
-                // currently have no system that re-marks ChunkDirty on Grid
-                // change — they won't see the dig visually until that's
-                // wired up. Flagged for Task 12.
-                let chunk_coord = IVec2::new(
-                    event.target.x.div_euclid(CHUNK_TILES),
-                    event.target.y.div_euclid(CHUNK_TILES),
-                );
-                for (e, c) in chunks_q.iter() {
-                    if c.coord == chunk_coord {
-                        commands.entity(e).insert(ChunkDirty);
-                        break;
-                    }
-                }
-                if result.status == DigStatus::Broken {
-                    if let Some(ore) = result.ore {
-                        let item = ItemKind::Ore(ore);
-                        let world_pos = tile_center_world(event.target);
-                        commands.spawn((
-                            OreDrop { item },
-                            Sprite {
-                                color: item_color(item),
-                                custom_size: Some(Vec2::splat(6.0)),
-                                ..default()
-                            },
-                            Transform::from_translation(world_pos.extend(4.0)),
-                            Replicated,
-                        ));
-                    }
+        if matches!(result.status, DigStatus::Broken | DigStatus::Damaged) {
+            let chunk_coord = IVec2::new(
+                event.target.x.div_euclid(CHUNK_TILES),
+                event.target.y.div_euclid(CHUNK_TILES),
+            );
+            for (e, c) in chunks_q.iter() {
+                if c.coord == chunk_coord {
+                    commands.entity(e).insert(ChunkDirty);
+                    break;
                 }
             }
-            _ => {}
+        }
+        if result.status == DigStatus::Broken {
+            if let Some(ore) = result.ore {
+                let item = ItemKind::Ore(ore);
+                let world_pos = tile_center_world(event.target);
+                commands.spawn((
+                    OreDrop { item },
+                    Sprite {
+                        color: item_color(item),
+                        custom_size: Some(Vec2::splat(6.0)),
+                        ..default()
+                    },
+                    Transform::from_translation(world_pos.extend(4.0)),
+                    Replicated,
+                ));
+            }
         }
     }
 }
