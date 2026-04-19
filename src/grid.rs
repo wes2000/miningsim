@@ -23,7 +23,7 @@ impl Default for Tile {
     }
 }
 
-#[derive(Debug, Clone, bevy::prelude::Resource, Serialize, Deserialize)]
+#[derive(Debug, Clone, bevy::prelude::Component, Serialize, Deserialize)]
 pub struct Grid {
     width: u32,
     height: u32,

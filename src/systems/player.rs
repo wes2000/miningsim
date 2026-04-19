@@ -66,10 +66,11 @@ pub fn apply_velocity_system(
 }
 
 pub fn collide_player_with_grid_system(
-    grid: Option<Res<Grid>>,
+    grid: Option<Single<&Grid>>,
     mut q: Query<&mut Transform, With<Player>>,
 ) {
     let Some(grid) = grid else { return };
+    let grid = grid.into_inner();
     let Ok(mut t) = q.get_single_mut() else { return };
 
     // Resolve X then Y. Player AABB is [pos.xy ± PLAYER_HALF].
@@ -128,13 +129,14 @@ pub fn dig_input_system(
     win_q: Query<&Window, With<PrimaryWindow>>,
     cam_q: Query<(&Camera, &GlobalTransform), With<crate::components::MainCamera>>,
     player_q: Query<(&Transform, &Facing), With<Player>>,
-    mut grid: ResMut<Grid>,
+    grid: Single<&mut Grid>,
     mut cooldown: ResMut<DigCooldown>,
     chunks_q: Query<(Entity, &TerrainChunk)>,
     owned_tools: Single<&crate::tools::OwnedTools, With<crate::components::LocalPlayer>>,
     time: Res<Time>,
 ) {
     cooldown.0.tick(time.delta());
+    let mut grid = grid.into_inner();
 
     // Two trigger paths. Mouse wins if both are held (more specific aim).
     let mouse_held = mouse.pressed(MouseButton::Left);

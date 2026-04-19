@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_replicon::prelude::Replicated;
 use crate::components::{Facing, InventoryPopupOpen, LocalPlayer, MainCamera, Player, Shop, ShopUiOpen, Smelter, SmelterUiOpen, Velocity};
 use crate::coords::tile_center_world;
 use crate::economy::Money;
@@ -17,7 +18,9 @@ pub fn setup_world(mut commands: Commands) {
     let sp = terrain_gen::spawn_tile(&grid);
     let player_world = tile_center_world(IVec2::new(sp.0, sp.1));
 
-    commands.insert_resource(grid);
+    // Grid lives as a Component on a singleton entity so replicon can stream
+    // it to clients (Task 9.5). Replicated marker is a no-op in single-player.
+    commands.spawn((grid, Replicated));
     commands.insert_resource(crate::systems::player::DigCooldown::default());
     commands.insert_resource(ShopUiOpen::default());
     commands.insert_resource(SmelterUiOpen::default());

@@ -4,6 +4,7 @@ use bevy_replicon_renet::RepliconRenetPlugins;
 
 use crate::components::Player;
 use crate::economy::Money;
+use crate::grid::Grid;
 use crate::inventory::Inventory;
 use crate::processing::SmelterState;
 use crate::systems::net_events::{
@@ -19,15 +20,12 @@ impl Plugin for MultiplayerPlugin {
         app.add_plugins(RepliconRenetPlugins);
 
         // Replicated components — host writes, all clients read.
-        // NOTE: Grid is intentionally NOT replicated here. It's a Resource (not a
-        // Component), so `replicate::<Grid>()` won't compile, and converting it to a
-        // Component would require touching every Res<Grid>/ResMut<Grid> consumer.
-        // For now we rely on each peer regenerating the world from the same seed.
-        // Tasks 10/12 may need to revisit this if dig-by-other-player must propagate
-        // byte-for-byte (vs. via DigRequest events that mutate each peer's local Grid).
+        // Grid replicates as a Component on a singleton entity, spawned in
+        // setup_world with Replicated marker (Task 9.5).
         app.replicate::<Player>()
             .replicate::<SmelterState>()
             .replicate::<Money>()
+            .replicate::<Grid>()
             .replicate::<Inventory>()
             .replicate::<OwnedTools>()
             .replicate::<Transform>();
