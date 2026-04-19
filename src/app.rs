@@ -17,6 +17,7 @@ pub struct MiningSimPlugin;
 
 impl Plugin for MiningSimPlugin {
     fn build(&self, app: &mut App) {
+        // Requires Res<NetMode> to be inserted before this plugin is added (see main.rs).
         app.add_systems(Startup, (
                 setup::setup_world,
                 hud::setup_top_right_hud,

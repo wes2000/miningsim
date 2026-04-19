@@ -4,7 +4,7 @@ use std::path::Path;
 use bevy::app::AppExit;
 use bevy::prelude::*;
 
-use crate::components::{LocalPlayer, Player, Smelter};
+use crate::components::{LocalPlayer, Smelter};
 use crate::economy::Money;
 use crate::grid::Grid;
 use crate::inventory::Inventory;
@@ -21,7 +21,7 @@ pub fn startup_load_system(
     grid: Single<&mut Grid>,
     local_player: Single<(&mut Money, &mut Inventory, &mut OwnedTools), With<LocalPlayer>>,
     smelter_q: Query<&mut SmelterState, With<Smelter>>,
-    player_q: Query<&mut Transform, With<Player>>,
+    player_q: Query<&mut Transform, With<LocalPlayer>>,
 ) {
     if !Path::new(SAVE_PATH).exists() {
         info!("no save file found, starting fresh");
@@ -41,7 +41,7 @@ pub fn save_hotkey_system(
     grid: Single<&Grid>,
     local_player: Single<(&Money, &Inventory, &OwnedTools), With<LocalPlayer>>,
     smelter_q: Query<&SmelterState, With<Smelter>>,
-    player_q: Query<&Transform, With<Player>>,
+    player_q: Query<&Transform, With<LocalPlayer>>,
 ) {
     if !keys.just_pressed(KeyCode::F5) { return; }
     let (money, inventory, owned) = local_player.into_inner();
@@ -53,7 +53,7 @@ pub fn load_hotkey_system(
     grid: Single<&mut Grid>,
     local_player: Single<(&mut Money, &mut Inventory, &mut OwnedTools), With<LocalPlayer>>,
     smelter_q: Query<&mut SmelterState, With<Smelter>>,
-    player_q: Query<&mut Transform, With<Player>>,
+    player_q: Query<&mut Transform, With<LocalPlayer>>,
 ) {
     if !keys.just_pressed(KeyCode::F9) { return; }
     let mut grid = grid.into_inner();
@@ -70,7 +70,7 @@ pub fn auto_save_on_exit_system(
     grid: Single<&Grid>,
     local_player: Single<(&Money, &Inventory, &OwnedTools), With<LocalPlayer>>,
     smelter_q: Query<&SmelterState, With<Smelter>>,
-    player_q: Query<&Transform, With<Player>>,
+    player_q: Query<&Transform, With<LocalPlayer>>,
 ) {
     if exit_events.read().next().is_none() { return; }
     info!("auto-saving on exit");
@@ -86,7 +86,7 @@ fn save_now(
     money: &Money,
     owned: &OwnedTools,
     smelter_q: &Query<&SmelterState, With<Smelter>>,
-    player_q: &Query<&Transform, With<Player>>,
+    player_q: &Query<&Transform, With<LocalPlayer>>,
 ) {
     let Ok(smelter) = smelter_q.get_single() else {
         warn!("save_now: smelter entity missing; skipping save");
@@ -118,7 +118,7 @@ fn try_load_and_apply(
     money: &mut Money,
     owned: &mut OwnedTools,
     mut smelter_q: Query<&mut SmelterState, With<Smelter>>,
-    mut player_q: Query<&mut Transform, With<Player>>,
+    mut player_q: Query<&mut Transform, With<LocalPlayer>>,
 ) -> Result<(), LoadError> {
     let s = fs::read_to_string(SAVE_PATH).map_err(LoadError::Io)?;
     let data = save::deserialize_ron(&s)?;

@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+// Replicated marker is inert in single-player (no replicon plugin); attached to
+// Grid + Player so they replicate when MultiplayerPlugin is loaded in Host mode.
 use bevy_replicon::prelude::Replicated;
 use crate::components::{Facing, InventoryPopupOpen, LocalPlayer, MainCamera, NetOwner, Player, Shop, ShopUiOpen, Smelter, SmelterUiOpen, Velocity};
 use crate::coords::tile_center_world;

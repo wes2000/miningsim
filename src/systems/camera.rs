@@ -1,8 +1,8 @@
 use bevy::prelude::*;
-use crate::components::{MainCamera, Player};
+use crate::components::{LocalPlayer, MainCamera};
 
 pub fn camera_follow_system(
-    player_q: Query<&Transform, (With<Player>, Without<MainCamera>)>,
+    player_q: Query<&Transform, (With<LocalPlayer>, Without<MainCamera>)>,
     mut cam_q: Query<&mut Transform, With<MainCamera>>,
     time: Res<Time>,
 ) {

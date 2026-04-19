@@ -25,6 +25,7 @@
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::SystemTime;
 
+use bevy::app::AppExit;
 use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use bevy_replicon::shared::backend::connected_client::NetworkId;
@@ -65,17 +66,23 @@ pub fn start_net_mode_system(
     mut commands: Commands,
     net_mode: Res<NetMode>,
     channels: Res<RepliconChannels>,
+    mut exit: EventWriter<AppExit>,
 ) {
     match net_mode.clone() {
         NetMode::SinglePlayer => {}
         NetMode::Host { port } => {
             if let Err(e) = setup_host(&mut commands, &channels, port) {
+                // Fail loudly: without transport, replicon silently no-ops and
+                // the user sees an apparently-running app that never replicates.
+                // Emit AppExit::error so the launcher knows the run failed.
                 error!("failed to start host on port {port}: {e}");
+                exit.send(AppExit::error());
             }
         }
         NetMode::Client { addr } => {
             if let Err(e) = setup_client(&mut commands, &channels, addr) {
                 error!("failed to connect client to {addr}: {e}");
+                exit.send(AppExit::error());
             }
         }
     }
@@ -130,6 +137,10 @@ fn setup_client(
     // Stored in a resource so we can identify our own Player when it arrives
     // via replication (server tags Players with NetOwner = client_id).
     let client_id = current_time.as_millis() as u64;
+    debug_assert_ne!(
+        client_id, HOST_NET_OWNER,
+        "client_id collided with HOST_NET_OWNER sentinel"
+    );
     let authentication = ClientAuthentication::Unsecure {
         client_id,
         protocol_id: PROTOCOL_ID,
@@ -278,6 +289,10 @@ pub fn exit_on_host_disconnect(
 /// but those tiles are already covered by the per-chunk dirtying inside
 /// `handle_dig_requests`/local dig — re-dirtying them is harmless (the chunk
 /// renderer is idempotent).
+// SCALING: re-meshes ALL chunks on every Grid change. Acceptable at 80x200
+// (~25 chunks), painful at 200x500. Future fix: switch to per-tile delta
+// events via `add_server_event` so clients can mark only the affected chunk
+// dirty instead of dirtying the world.
 pub fn mark_chunks_dirty_on_grid_change(
     grid_q: Query<Ref<Grid>>,
     chunks: Query<Entity, With<TerrainChunk>>,

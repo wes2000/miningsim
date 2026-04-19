@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::components::{LocalPlayer, OreDrop, Player};
+use crate::components::{LocalPlayer, OreDrop};
 use crate::inventory::Inventory;
 use crate::coords::TILE_SIZE_PX;
 
@@ -10,8 +10,8 @@ pub const PICKUP_DISTANCE_PX: f32 = 6.0;
 pub fn ore_drop_system(
     mut commands: Commands,
     time: Res<Time>,
-    player_q: Query<&Transform, With<Player>>,
-    mut drops_q: Query<(Entity, &OreDrop, &mut Transform), Without<Player>>,
+    player_q: Query<&Transform, With<LocalPlayer>>,
+    mut drops_q: Query<(Entity, &OreDrop, &mut Transform), Without<LocalPlayer>>,
     local_inv: Single<&mut Inventory, With<LocalPlayer>>,
 ) {
     let Ok(player_xf) = player_q.get_single() else { return };

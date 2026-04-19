@@ -105,6 +105,7 @@ impl Plugin for MultiplayerPlugin {
 /// connected-client entity). Returns `None` for events whose sender has no
 /// matching Player yet (race during connect / before Task 12 spawns one) or
 /// for the host's own local Player (which has no `OwningClient` component).
+// TODO: switch to a HashMap<Entity /*client*/, Entity /*player*/> resource updated by spawn/despawn observers if max_clients ever exceeds ~16.
 fn player_entity_for_client(
     client_entity: Entity,
     q: &Query<(Entity, &OwningClient), With<Player>>,

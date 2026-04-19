@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use crate::components::{ChunkDirty, Facing, OreDrop, Player, TerrainChunk, Velocity};
+use crate::components::{ChunkDirty, Facing, LocalPlayer, OreDrop, Player, TerrainChunk, Velocity};
 use crate::coords::{self, TILE_SIZE_PX};
 use crate::dig::{self, DigStatus};
 use crate::grid::Grid;
@@ -25,7 +25,7 @@ pub const PLAYER_HALF: f32 = 6.0; // 12px sprite
 
 pub fn read_input_system(
     keys: Res<ButtonInput<KeyCode>>,
-    mut q: Query<(&mut Velocity, &mut Facing), With<Player>>,
+    mut q: Query<(&mut Velocity, &mut Facing), With<LocalPlayer>>,
 ) {
     let mut dir = Vec2::ZERO;
     if keys.pressed(KeyCode::KeyW) { dir.y += 1.0; }
@@ -68,7 +68,7 @@ pub fn apply_velocity_system(
 
 pub fn collide_player_with_grid_system(
     grid: Option<Single<&Grid>>,
-    mut q: Query<&mut Transform, With<Player>>,
+    mut q: Query<&mut Transform, With<LocalPlayer>>,
 ) {
     let Some(grid) = grid else { return };
     let grid = grid.into_inner();
@@ -129,7 +129,7 @@ pub fn dig_input_system(
     keys: Res<ButtonInput<KeyCode>>,
     win_q: Query<&Window, With<PrimaryWindow>>,
     cam_q: Query<(&Camera, &GlobalTransform), With<crate::components::MainCamera>>,
-    player_q: Query<(&Transform, &Facing), With<Player>>,
+    player_q: Query<(&Transform, &Facing), With<LocalPlayer>>,
     grid: Single<&mut Grid>,
     mut cooldown: ResMut<DigCooldown>,
     chunks_q: Query<(Entity, &TerrainChunk)>,

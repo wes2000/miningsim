@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use crate::components::{
-    LocalPlayer, Player, Smelter, SmelterButtonKind, SmelterStatusText, SmelterUiOpen, SmelterUiRoot,
+    LocalPlayer, Smelter, SmelterButtonKind, SmelterStatusText, SmelterUiOpen, SmelterUiRoot,
 };
 use crate::coords::TILE_SIZE_PX;
 use crate::inventory::Inventory;
@@ -13,8 +13,8 @@ pub const SMELTER_INTERACT_RADIUS_TILES: f32 = 2.0;
 pub fn smelter_interact_system(
     keys: Res<ButtonInput<KeyCode>>,
     mut ui_open: ResMut<SmelterUiOpen>,
-    player_q: Query<&Transform, With<Player>>,
-    smelter_q: Query<&Transform, (With<Smelter>, Without<Player>)>,
+    player_q: Query<&Transform, With<LocalPlayer>>,
+    smelter_q: Query<&Transform, (With<Smelter>, Without<LocalPlayer>)>,
 ) {
     if keys.just_pressed(KeyCode::Escape) {
         ui_open.0 = false;
@@ -31,8 +31,8 @@ pub fn smelter_interact_system(
 
 pub fn close_smelter_on_walk_away_system(
     mut ui_open: ResMut<SmelterUiOpen>,
-    player_q: Query<&Transform, With<Player>>,
-    smelter_q: Query<&Transform, (With<Smelter>, Without<Player>)>,
+    player_q: Query<&Transform, With<LocalPlayer>>,
+    smelter_q: Query<&Transform, (With<Smelter>, Without<LocalPlayer>)>,
 ) {
     if !ui_open.0 { return; }
     let Ok(player) = player_q.get_single() else { return };

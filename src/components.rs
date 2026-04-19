@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::items::{ItemKind, OreKind};
 use crate::tools::Tool;
 
+/// Marker on the player entity. Serde derives are required by replicon's replicate::<Player>(); the 0-byte payload signals "this entity is a player" to clients.
 #[derive(Component, Serialize, Deserialize)]
 pub struct Player;
 
