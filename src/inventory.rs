@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use bevy::prelude::Resource;
+use serde::{Deserialize, Serialize};
 use crate::items::ItemKind;
 
-#[derive(Debug, Default, Resource)]
+#[derive(Debug, Default, Clone, Resource, Serialize, Deserialize)]
 pub struct Inventory {
     counts: HashMap<ItemKind, u32>,
 }

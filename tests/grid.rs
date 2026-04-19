@@ -71,3 +71,21 @@ fn layer_core_variant_exists() {
     g.set(1, 1, Tile { solid: true, layer: Layer::Core, ore: None, damage: 0 });
     assert_eq!(g.get(1, 1).unwrap().layer, Layer::Core);
 }
+
+#[test]
+fn from_raw_round_trips_via_serde() {
+    let mut g = Grid::new(3, 3);
+    g.set(1, 1, Tile { solid: true, layer: Layer::Stone, ore: Some(OreKind::Silver), damage: 2 });
+    let s = ron::ser::to_string(&g).expect("serialize");
+    let g2: Grid = ron::de::from_str(&s).expect("deserialize");
+    assert_eq!(g2.width(), g.width());
+    assert_eq!(g2.height(), g.height());
+    assert_eq!(g2.get(1, 1), g.get(1, 1));
+    assert_eq!(g2.get(0, 0), g.get(0, 0));
+}
+
+#[test]
+#[should_panic]
+fn from_raw_panics_on_length_mismatch() {
+    let _ = Grid::from_raw(3, 3, vec![Tile::default(); 4]);
+}

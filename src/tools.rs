@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 use bevy::prelude::Resource;
+use serde::{Deserialize, Serialize};
 
 use crate::grid::Layer;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Tool {
     Shovel,
     Pickaxe,
@@ -38,7 +39,7 @@ pub fn clicks_required(tool: Tool, layer: Layer) -> Option<u8> {
     Some(3 - gap)
 }
 
-#[derive(Debug, Resource)]
+#[derive(Debug, Clone, Resource, Serialize, Deserialize)]
 pub struct OwnedTools(pub HashSet<Tool>);
 
 impl Default for OwnedTools {
