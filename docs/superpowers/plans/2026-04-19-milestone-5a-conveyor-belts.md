@@ -60,7 +60,7 @@ tests/
   economy.rs                   # no change expected
 ```
 
-Test count target: **~118 tests** (101 existing + 12 belt + 3 save + 2 net_events).
+Test count target: **~122 tests** (101 existing + 16 belt + 3 save + 2 net_events).
 
 ---
 
@@ -84,9 +84,9 @@ Three checkpoints before final merge:
 
 2. **After Task 7** (single-player gameplay loop) — full single-player belt loop works. Place belts, dig adjacent to drop ore on a belt, ore advances, smelter consumes, bar comes out, spillage at dead-end works.
 
-3. **After Task 11** (multiplayer) — two-window co-op: trust-based placement, replicated belt movement, client-fired place/remove requests.
+3. **After Task 10** (multiplayer) — two-window co-op: trust-based placement, replicated belt movement, client-fired place/remove requests.
 
-Plus the final exit-criteria walkthrough in Task 12 before merge.
+Plus the final exit-criteria walkthrough in Task 11 before merge.
 
 ---
 
@@ -233,7 +233,100 @@ fn belt_visual_feeder_facing_away_is_straight() {
     // self East, feeder dir = West (feeder is to the south but its arrow points away from us) => no feed
     assert_eq!(belt::belt_visual_kind(BeltDir::East, Some(BeltDir::West)), BeltVisual::Straight);
 }
+
+// ---------- Back-pressure pure helper tests ----------
+// `compute_belt_advances` takes a snapshot of belt positions+dirs and which
+// belts currently hold an item, and returns the list of (from, to) moves to
+// apply this tick. Tests below exercise the algorithm independently of Bevy.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+fn dirs(pairs: &[(IVec2, BeltDir)]) -> BTreeMap<IVec2, BeltDir> {
+    pairs.iter().copied().collect()
+}
+
+fn items(positions: &[IVec2]) -> BTreeSet<IVec2> {
+    positions.iter().copied().collect()
+}
+
+#[test]
+fn back_pressure_chain_clears_simultaneously() {
+    // Three belts in a row, all facing East, all carrying an item. Destination
+    // (3,0) is empty (off the belt graph — spillage handled separately). All
+    // three items advance one tile this tick.
+    let belt_dirs = dirs(&[
+        (IVec2::new(0, 0), BeltDir::East),
+        (IVec2::new(1, 0), BeltDir::East),
+        (IVec2::new(2, 0), BeltDir::East),
+    ]);
+    let item_positions = items(&[IVec2::new(0, 0), IVec2::new(1, 0), IVec2::new(2, 0)]);
+    let moves = belt::compute_belt_advances(&belt_dirs, &item_positions);
+    let mut moves_set: BTreeSet<(IVec2, IVec2)> = moves.into_iter().collect();
+    // Head item leaves the graph; remaining two shift forward one tile.
+    assert!(moves_set.contains(&(IVec2::new(2, 0), IVec2::new(3, 0))));
+    assert!(moves_set.contains(&(IVec2::new(1, 0), IVec2::new(2, 0))));
+    assert!(moves_set.contains(&(IVec2::new(0, 0), IVec2::new(1, 0))));
+    assert_eq!(moves_set.len(), 3);
+}
+
+#[test]
+fn back_pressure_blocks_when_destination_full() {
+    // Two belts: (0,0) East with item, (1,0) East with item. Destination (2,0)
+    // is NOT a belt → spillage path. The head item (1,0) goes to (2,0); the
+    // tail (0,0) advances into the now-empty (1,0).
+    let belt_dirs = dirs(&[
+        (IVec2::new(0, 0), BeltDir::East),
+        (IVec2::new(1, 0), BeltDir::East),
+    ]);
+    let item_positions = items(&[IVec2::new(0, 0), IVec2::new(1, 0)]);
+    let moves = belt::compute_belt_advances(&belt_dirs, &item_positions);
+    let moves_set: BTreeSet<(IVec2, IVec2)> = moves.into_iter().collect();
+    assert!(moves_set.contains(&(IVec2::new(1, 0), IVec2::new(2, 0))));
+    assert!(moves_set.contains(&(IVec2::new(0, 0), IVec2::new(1, 0))));
+    assert_eq!(moves_set.len(), 2);
+}
+
+#[test]
+fn back_pressure_saturated_cycle_freezes() {
+    // Four belts in a CW cycle, all carrying items, no slack → no moves possible.
+    // (Players add slack by removing one belt or letting one item exit.)
+    let belt_dirs = dirs(&[
+        (IVec2::new(0, 0), BeltDir::East),
+        (IVec2::new(1, 0), BeltDir::South),
+        (IVec2::new(1, 1), BeltDir::West),
+        (IVec2::new(0, 1), BeltDir::North),
+    ]);
+    let item_positions = items(&[
+        IVec2::new(0, 0), IVec2::new(1, 0), IVec2::new(1, 1), IVec2::new(0, 1),
+    ]);
+    let moves = belt::compute_belt_advances(&belt_dirs, &item_positions);
+    assert!(moves.is_empty(), "saturated cycle must freeze");
+}
+
+#[test]
+fn back_pressure_cycle_with_slack_rotates() {
+    // Same 4-belt CW cycle but only 3 items (one slot empty at (0,1)).
+    // The remaining 3 items each advance one tile.
+    let belt_dirs = dirs(&[
+        (IVec2::new(0, 0), BeltDir::East),
+        (IVec2::new(1, 0), BeltDir::South),
+        (IVec2::new(1, 1), BeltDir::West),
+        (IVec2::new(0, 1), BeltDir::North),
+    ]);
+    let item_positions = items(&[
+        IVec2::new(0, 0), IVec2::new(1, 0), IVec2::new(1, 1),
+    ]);
+    let moves = belt::compute_belt_advances(&belt_dirs, &item_positions);
+    let moves_set: BTreeSet<(IVec2, IVec2)> = moves.into_iter().collect();
+    // Each of the three items advances to its `next_tile`.
+    assert!(moves_set.contains(&(IVec2::new(0, 0), IVec2::new(1, 0))));
+    assert!(moves_set.contains(&(IVec2::new(1, 0), IVec2::new(1, 1))));
+    assert!(moves_set.contains(&(IVec2::new(1, 1), IVec2::new(0, 1))));
+    assert_eq!(moves_set.len(), 3);
+}
 ```
+
+That's 16 tests total (12 from the original list + 4 back-pressure). Slight overshoot vs. the spec's "~12" target — accept the higher count; the algorithm is too important to leave unverified.
 
 - [ ] **Step 3: Run tests — expect compile failure**
 
@@ -365,27 +458,74 @@ pub fn belt_visual_kind(self_dir: BeltDir, feeder_dir: Option<BeltDir>) -> BeltV
         _ => BeltVisual::Straight,  // unreachable given the perpendicular check
     }
 }
+
+/// Pure back-pressure decision: given the current belt graph and which tiles
+/// have items, return the list of (from, to) moves to apply this tick. A move
+/// is included iff the destination tile, after applying all other moves this
+/// tick, will be empty. Saturated cycles produce zero moves.
+///
+/// Algorithm: iterate to fixed point. Each round, collect moves whose
+/// destination is currently empty (after prior rounds' moves). Apply them.
+/// Repeat until no new moves. Bounded by N rounds for N belts.
+///
+/// `belts`: tile coord → belt direction (every belt entity present this tick).
+/// `items_present`: tile coords that currently hold an item.
+///
+/// Note: items advancing to a tile that is NOT in `belts` (i.e. off the belt
+/// graph — spillage destinations) ARE included in the returned moves. The
+/// caller is responsible for spillage handling on those.
+pub fn compute_belt_advances(
+    belts: &std::collections::BTreeMap<bevy::math::IVec2, BeltDir>,
+    items_present: &std::collections::BTreeSet<bevy::math::IVec2>,
+) -> Vec<(bevy::math::IVec2, bevy::math::IVec2)> {
+    let mut moves = Vec::new();
+    // `current_items` is mutated as we apply moves; tracks who holds an item right now.
+    let mut current_items: std::collections::BTreeSet<bevy::math::IVec2> =
+        items_present.clone();
+
+    loop {
+        let mut round_moves = Vec::new();
+        for (&pos, &dir) in belts.iter() {
+            if !current_items.contains(&pos) { continue }
+            let dest = next_tile(pos, dir);
+            // Move-to is allowed if dest is not currently held by an item.
+            // (Spillage destinations off the belt graph naturally don't hold items.)
+            if !current_items.contains(&dest) {
+                round_moves.push((pos, dest));
+            }
+        }
+        if round_moves.is_empty() { break }
+        for (from, to) in &round_moves {
+            current_items.remove(from);
+            current_items.insert(*to);
+            moves.push((*from, *to));
+        }
+    }
+    moves
+}
 ```
 
-- [ ] **Step 5: Run tests — expect 12/12 passing**
+Note the helper deliberately uses `BTreeMap` and `BTreeSet` (deterministic iteration) rather than `HashMap`/`HashSet`, matching the M4 lesson on replicon determinism.
+
+- [ ] **Step 5: Run tests — expect 16/16 passing**
 
 ```bash
 cargo test --test belt 2>&1 | tail -10
 ```
-Expected: `12 passed; 0 failed`.
+Expected: `16 passed; 0 failed`.
 
 - [ ] **Step 6: Full regression**
 
 ```bash
 cargo test 2>&1 | grep "test result"
 ```
-Expected: 101 + 12 = 113 tests passing.
+Expected: 101 + 16 = 117 tests passing.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add src/belt.rs tests/belt.rs src/lib.rs
-git commit --author="wes2000 <whannasch@gmail.com>" -m "Add belt pure module: BeltDir, BeltTile, BeltVisual + 12 unit tests"
+git commit --author="wes2000 <whannasch@gmail.com>" -m "Add belt pure module: BeltDir/BeltTile/BeltVisual + back-pressure helper + 16 unit tests"
 ```
 
 ---
@@ -454,7 +594,7 @@ The label can be `"Belt Networks"` (matches the spec's user-facing name).
 cargo build 2>&1 | tail -5
 cargo test 2>&1 | grep "test result"
 ```
-Expected: 113 tests still passing. Build clean. Existing economy/tools tests should pass unchanged (the new variant is additive).
+Expected: 117 tests still passing. Build clean. Existing economy/tools tests should pass unchanged (the new variant is additive).
 
 If `tests/economy.rs` exhaustively asserts on the Tool enum (e.g., a `match` over all variants), it will fail to compile — fix by adding a `BeltUnlock` arm with the expected price (200).
 
@@ -672,6 +812,7 @@ pub fn belt_place_system(
             ..default()
         },
         Transform::from_translation(center.extend(3.0)),
+        bevy_replicon::prelude::Replicated,  // inert in single-player; needed in Host mode
     ));
 }
 
@@ -739,23 +880,28 @@ fn validate_belt_placement(
     true
 }
 
-/// Recompute `BeltVisual` for any belt whose direction or neighbors changed
-/// this frame. Runs every frame; cheap because it only writes when a belt's
-/// computed visual differs from its stored one.
+/// Recompute `BeltVisual` when belts are added, removed, or have their
+/// direction changed. Gated on `Changed<BeltTile>` so we don't iterate every
+/// frame in steady state. When ANY belt changes, we conservatively recompute
+/// for every belt (the changed belt's neighbors might also need updates) —
+/// fine at MVP scale; revisit with neighbor-only invalidation if perf matters.
 pub fn belt_visual_recompute_system(
-    mut belts_q: Query<(Entity, &Transform, &BeltTile, &mut BeltVisual)>,
+    changed_q: Query<(), Changed<BeltTile>>,
+    removed: RemovedComponents<BeltTile>,
+    mut belts_q: Query<(&Transform, &BeltTile, &mut BeltVisual)>,
     all_belts_q: Query<(&Transform, &BeltTile)>,
 ) {
-    // Build a map from tile coord to belt direction for neighbor lookup.
-    use std::collections::HashMap;
-    let map: HashMap<bevy::math::IVec2, BeltDir> = all_belts_q
+    // Skip if nothing changed and no belts were removed.
+    if changed_q.is_empty() && removed.is_empty() { return }
+
+    use std::collections::BTreeMap;
+    let map: BTreeMap<bevy::math::IVec2, BeltDir> = all_belts_q
         .iter()
         .map(|(xf, bt)| (world_to_tile(xf.translation.truncate()), bt.dir))
         .collect();
 
-    for (_, xf, bt, mut visual) in belts_q.iter_mut() {
+    for (xf, bt, mut visual) in belts_q.iter_mut() {
         let pos = world_to_tile(xf.translation.truncate());
-        // Find a perpendicular neighbor that feeds INTO this belt.
         let feeder = perpendicular_feeder(pos, bt.dir, &map);
         let new_visual = belt::belt_visual_kind(bt.dir, feeder);
         if *visual != new_visual {
@@ -769,9 +915,8 @@ pub fn belt_visual_recompute_system(
 fn perpendicular_feeder(
     pos: bevy::math::IVec2,
     self_dir: BeltDir,
-    map: &std::collections::HashMap<bevy::math::IVec2, BeltDir>,
+    map: &std::collections::BTreeMap<bevy::math::IVec2, BeltDir>,
 ) -> Option<BeltDir> {
-    use bevy::math::IVec2;
     let perps = match self_dir {
         BeltDir::East | BeltDir::West => [BeltDir::North, BeltDir::South],
         BeltDir::North | BeltDir::South => [BeltDir::East, BeltDir::West],
@@ -817,7 +962,7 @@ app.add_systems(Update, (
 cargo build 2>&1 | tail -10
 cargo test 2>&1 | grep "test result"
 ```
-Expected: 113 tests still passing. Build clean.
+Expected: 117 tests still passing. Build clean.
 
 - [ ] **Step 6: Commit**
 
@@ -859,17 +1004,18 @@ After this task: items placed manually on a belt advance one tile per second. No
 
 - [ ] **Step 1: Create `src/systems/belt.rs`**
 
+The algorithm lives entirely in the pure `belt::compute_belt_advances` helper from Task 1. This system is just glue: snapshot world state into the helper's input shape, call the helper, apply the returned moves back to the World.
+
 ```rust
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::belt::{self, BeltTile};
 use crate::coords::world_to_tile;
 
-/// Belts tick every `BELT_TICK_SECONDS`. Items try to advance one tile in
-/// their belt's direction. Back-pressure cascades naturally: an item won't
-/// move into a destination that's full unless that destination's own item
-/// is also moving out this tick.
+/// Belts tick every `BELT_TICK_SECONDS` (1.0). Items try to advance one tile
+/// in their belt's direction. Back-pressure semantics live in the pure
+/// `compute_belt_advances` helper.
 pub const BELT_TICK_SECONDS: f32 = 1.0;
 
 #[derive(Resource)]
@@ -884,74 +1030,90 @@ impl Default for BeltTickTimer {
 pub fn belt_tick_system(
     time: Res<Time>,
     mut timer: ResMut<BeltTickTimer>,
-    mut belts_q: Query<(&Transform, &mut BeltTile)>,
+    mut belts_q: Query<(Entity, &Transform, &mut BeltTile)>,
 ) {
     timer.0.tick(time.delta());
-    if !timer.0.just_finished() { return };
+    if !timer.0.just_finished() { return }
 
-    // Snapshot positions and tiles. Keyed by tile coord.
-    let mut by_pos: HashMap<bevy::math::IVec2, (Entity, BeltTile)> = HashMap::new();
-    let mut entities_by_pos: HashMap<bevy::math::IVec2, Entity> = HashMap::new();
-    for (xf, bt) in belts_q.iter() {
+    // Snapshot: build the (position → direction) map and (position → entity)
+    // index, plus the set of tiles currently holding an item.
+    let mut belt_dirs: BTreeMap<bevy::math::IVec2, belt::BeltDir> = BTreeMap::new();
+    let mut entity_at: BTreeMap<bevy::math::IVec2, Entity> = BTreeMap::new();
+    let mut item_at: BTreeMap<bevy::math::IVec2, crate::items::ItemKind> = BTreeMap::new();
+    for (e, xf, bt) in belts_q.iter() {
         let pos = world_to_tile(xf.translation.truncate());
-        // We can't get Entity from this query directly — restructure with `Entity` in the query.
-        // (See implementation: Query<(Entity, &Transform, &mut BeltTile)>)
-        by_pos.insert(pos, (Entity::PLACEHOLDER, *bt));
-    }
-
-    // Two-pass advance:
-    // Pass 1: identify each tile that has an item and the destination it WANTS to move to.
-    //   - want_move[pos] = Some(dest) if pos has an item and dest is a belt that's empty
-    //     OR dest has an item that is also wanting to move (chain).
-    // Pass 2: apply moves. For each pos with want_move = Some(dest), set dest's item =
-    //   pos's item, set pos's item = None.
-
-    // Simpler stable algorithm: iterate to a fixed point. Each round, check tiles whose
-    // item could move (destination is belt + empty). Move them. Repeat until no change.
-    // Bounded by N rounds where N = number of belts.
-    let n = by_pos.len();
-    for _ in 0..n {
-        let mut changed = false;
-        // Collect intended moves this round.
-        let mut moves: Vec<(bevy::math::IVec2, bevy::math::IVec2)> = Vec::new();
-        for (&pos, (_, bt)) in by_pos.iter() {
-            if bt.item.is_none() { continue };
-            let dest = belt::next_tile(pos, bt.dir);
-            let Some((_, dest_bt)) = by_pos.get(&dest) else { continue };  // dest not a belt
-            if dest_bt.item.is_some() { continue };                         // dest occupied
-            moves.push((pos, dest));
+        belt_dirs.insert(pos, bt.dir);
+        entity_at.insert(pos, e);
+        if let Some(item) = bt.item {
+            item_at.insert(pos, item);
         }
-        // Apply.
-        for (from, to) in &moves {
-            let item = by_pos.get(from).and_then(|(_, bt)| bt.item);
-            if let Some(item) = item {
-                if let Some((_, bt)) = by_pos.get_mut(to) {
-                    bt.item = Some(item);
-                }
-                if let Some((_, bt)) = by_pos.get_mut(from) {
-                    bt.item = None;
-                }
-                changed = true;
+    }
+    let items_present: BTreeSet<bevy::math::IVec2> = item_at.keys().copied().collect();
+
+    // Pure helper computes the moves.
+    let moves = belt::compute_belt_advances(&belt_dirs, &items_present);
+
+    // Apply moves. We need to write to multiple BeltTile mutables; safest is
+    // to first compute a (entity, new_item) plan, then apply with a single
+    // iter_mut pass.
+    use std::collections::HashMap;
+    let mut new_item_for_entity: HashMap<Entity, Option<crate::items::ItemKind>> = HashMap::new();
+
+    for (from, to) in &moves {
+        let item = item_at.get(from).copied();
+        if let Some(item) = item {
+            if let Some(&from_e) = entity_at.get(from) {
+                new_item_for_entity.insert(from_e, None);
             }
+            // Destination may be off the belt graph (spillage destination); only set if it's a belt.
+            if let Some(&to_e) = entity_at.get(to) {
+                new_item_for_entity.insert(to_e, Some(item));
+            }
+            // Spillage of items moving off-graph is handled by `belt_spillage_system`
+            // BEFORE this tick (see app.rs set ordering: BeltSpillage runs after
+            // BeltTick on the *previous* frame; or run order can be adjusted).
+            // For MVP simplicity: if the destination isn't a belt, simply leave the
+            // item on the source — `belt_spillage_system` will spill it on its next
+            // pass. That means a single dead-end belt's item takes 2 ticks to spill,
+            // not 1. Acceptable.
         }
-        if !changed { break };
     }
 
-    // Write the updated tiles back to the World.
-    for (xf, mut bt) in belts_q.iter_mut() {
-        let pos = world_to_tile(xf.translation.truncate());
-        if let Some((_, new_bt)) = by_pos.get(&pos) {
-            *bt = *new_bt;
+    // To preserve "head of chain advances even when destination isn't a belt"
+    // semantics, we need to also clear the source's item when the destination is
+    // off-graph. Do that:
+    for (from, to) in &moves {
+        if !entity_at.contains_key(to) {
+            // Dest is off-graph; clear the source so the item is "in transit" and
+            // will be picked up by belt_spillage_system this tick.
+            if let Some(&from_e) = entity_at.get(from) {
+                new_item_for_entity.insert(from_e, None);
+            }
+            // We rely on belt_spillage_system having already run earlier this tick
+            // OR running next tick to actually spawn the OreDrop. See Task 6.
+        }
+    }
+
+    for (e, _, mut bt) in belts_q.iter_mut() {
+        if let Some(&new_item) = new_item_for_entity.get(&e) {
+            bt.item = new_item;
         }
     }
 }
 ```
 
-**Note on the Entity placeholder:** the example above uses a workaround. The clean implementation queries `Query<(Entity, &Transform, &mut BeltTile)>` and uses Entity for both lookup and writeback. Adapt the snippet — that's a copy-paste-ready starting point but the Entity threading needs cleanup before commit.
+**Notes for the implementer:**
+- All algorithmic correctness is in the pure helper — this system is just glue.
+- The HashMap → BTreeMap distinction matters: snapshot uses `BTreeMap` to feed the deterministic pure helper; the writeback HashMap is local-only and doesn't affect determinism.
+- Spillage interaction: `belt_spillage_system` (Task 6) runs AFTER `belt_tick_system` in the same tick (see app.rs set ordering). The above writeback correctly clears the source's item when the destination is off-graph; spillage detects "item moved off the belt" by computing `next_tile(pos, dir)` and seeing nothing there — but it needs to know the item WAS on this belt at start of tick. **Cleaner approach:** spillage uses its own snapshot at the start of the tick (run BEFORE belt_tick) and detects "this belt has an item AND its `next_tile` isn't a belt or smelter" → spill the item. Then belt_tick proceeds with the item already cleared. Tasks 4, 6 must coordinate; the cleanest set order is:
+  1. **BeltPickup** (OreDrop → empty belt)
+  2. **BeltSpillage** (items at dead-end belts → OreDrop, clear belt slot)
+  3. **BeltTick** (advance remaining items)
+  4. **SmelterBeltIo** (pull/push via direction-of-belt rule)
+  5. **SmelterTick** (existing — process queue, produce bars)
+  6. **SmelterUi** (existing — UI refresh)
 
-**Algorithm correctness:** the fixed-point loop handles the "chain of items all moving same direction" case (Scenario A in the spec). Each round, items that have an empty destination move. After one round, the head of the chain has moved out → the next item now sees an empty destination → moves. After N rounds, all moves that can happen have happened.
-
-For circular belts (Scenario from spec edge case): the loop won't make progress on a saturated cycle (every belt's dest is full, none can move). It exits after one round with `changed = false`. That's intentional — saturated cycles freeze. To make a cycle "rotate", players need at least one empty slot — then the empty slot propagates around the loop each tick.
+  This is one tick later than the spec's nominal order but is logically equivalent and avoids the "where did this item come from" coordination problem. Update Task 6 and the smoke-checkpoint pointers accordingly.
 
 - [ ] **Step 2: Register module + system**
 
@@ -970,7 +1132,7 @@ In `src/app.rs::MiningSimPlugin::build`:
 cargo build 2>&1 | tail -10
 cargo test 2>&1 | grep "test result"
 ```
-Expected: 113 tests still passing. Build clean.
+Expected: 117 tests still passing. Build clean.
 
 - [ ] **Step 4: Commit**
 
@@ -995,39 +1157,41 @@ After this task: an `OreDrop` floor sprite that lands on the same tile as an emp
 use crate::components::OreDrop;
 
 /// For each OreDrop, check if its tile coord matches an empty belt. If so,
-/// transfer the item into the belt and despawn the OreDrop.
+/// transfer the item into the belt and despawn the OreDrop. If multiple drops
+/// land on the same tile in the same frame, only the first one (in iter order)
+/// is picked up; subsequent drops remain on the floor for the next tick.
 pub fn belt_pickup_system(
     mut commands: Commands,
     drops_q: Query<(Entity, &Transform, &OreDrop)>,
     mut belts_q: Query<(&Transform, &mut BeltTile)>,
 ) {
-    use std::collections::HashMap;
-    // Build a position → (entity, belt) lookup. Note: same Entity-threading
-    // workaround as belt_tick_system; clean up using Query<(Entity, ...)>.
-    let mut belt_positions: HashMap<bevy::math::IVec2, ()> = belts_q
+    use std::collections::BTreeSet;
+    // Snapshot which tiles already had a belt with no item — these are the
+    // pickup candidates. We track which ones have been consumed this frame
+    // so the second drop on the same tile doesn't double-write.
+    let mut available_tiles: BTreeSet<bevy::math::IVec2> = belts_q
         .iter()
-        .map(|(xf, _)| (world_to_tile(xf.translation.truncate()), ()))
+        .filter(|(_, bt)| bt.item.is_none())
+        .map(|(xf, _)| world_to_tile(xf.translation.truncate()))
         .collect();
 
     for (drop_entity, drop_xf, drop_data) in drops_q.iter() {
         let drop_tile = world_to_tile(drop_xf.translation.truncate());
-        if !belt_positions.contains_key(&drop_tile) { continue };
+        if !available_tiles.contains(&drop_tile) { continue }
 
-        // Find the belt entity at this tile and check if it's empty.
+        // Find the belt entity at this tile and write the item.
         for (belt_xf, mut belt_tile) in belts_q.iter_mut() {
             let pos = world_to_tile(belt_xf.translation.truncate());
-            if pos == drop_tile && belt_tile.item.is_none() {
-                belt_tile.item = Some(drop_data.item);
-                commands.entity(drop_entity).despawn();
-                belt_positions.remove(&pos);  // prevent double-pickup if multiple drops on same tile
-                break;
-            }
+            if pos != drop_tile { continue }
+            if belt_tile.item.is_some() { break } // shouldn't happen given the snapshot, defensive
+            belt_tile.item = Some(drop_data.item);
+            commands.entity(drop_entity).despawn();
+            available_tiles.remove(&pos);   // mark consumed for subsequent drops this frame
+            break;
         }
     }
 }
 ```
-
-(Same Entity-threading caveat as Task 4: clean up to `Query<(Entity, &Transform, &OreDrop)>` etc. before commit.)
 
 - [ ] **Step 2: Register system in `src/app.rs`**
 
@@ -1044,7 +1208,7 @@ app.add_systems(Update, crate::systems::belt::belt_pickup_system
 cargo build 2>&1 | tail -10
 cargo test 2>&1 | grep "test result"
 ```
-Expected: 113 tests still passing. Build clean.
+Expected: 117 tests still passing. Build clean.
 
 - [ ] **Step 4: Commit**
 
@@ -1111,7 +1275,22 @@ pub fn belt_spillage_system(
 
 - [ ] **Step 2: Register system + set in `src/app.rs`**
 
-Add `MachineSet::BeltSpillage` variant. Place it AFTER `MachineSet::SmelterUi` in `configure_sets`.
+Add `MachineSet::BeltSpillage` variant. **Important per Task 4's note:** place it BEFORE `MachineSet::BeltTick` (spillage runs first, so items destined to leave the belt graph this tick get spilled before the tick attempts to advance them).
+
+Final set order in `configure_sets`:
+```
+... existing input + collide ...
+MachineSet::ShopProximity
+MachineSet::SmelterProximity
+MachineSet::BeltPickup        // Task 5
+MachineSet::BeltSpillage      // Task 6 (this task)
+MachineSet::BeltTick          // Task 4
+MachineSet::SmelterBeltIo     // Task 7
+MachineSet::SmelterTick       // existing
+MachineSet::ShopUi            // existing
+MachineSet::SmelterUi         // existing
+... existing drops + chunks + hud + camera ...
+```
 
 ```rust
 app.add_systems(Update, crate::systems::belt::belt_spillage_system
@@ -1124,7 +1303,7 @@ app.add_systems(Update, crate::systems::belt::belt_spillage_system
 cargo build 2>&1 | tail -10
 cargo test 2>&1 | grep "test result"
 ```
-Expected: 113 tests still passing.
+Expected: 117 tests still passing.
 
 - [ ] **Step 4: Commit**
 
@@ -1145,25 +1324,35 @@ After this task: belts adjacent to a smelter integrate. Belt pointing INTO smelt
 
 - [ ] **Step 1: Append `smelter_belt_io_system` to `src/systems/belt.rs`**
 
+Constants confirmed against the actual `src/processing.rs`:
+- `processing::SMELT_DURATION_S` (NOT `SMELT_TIME_SECONDS`)
+- `SmelterState.queue: u32` is uncapped in current code; for belt I/O we add a soft cap to prevent pathological pile-ups while the smelter is processing
+- `SmelterState` accepts only one `recipe: Option<OreKind>` at a time; when busy with one ore, others must wait
+
 ```rust
 use crate::belt::BeltDir;
 use crate::items::{ItemKind, OreKind};
 use crate::processing::{self, SmelterState};
 
-const QUEUE_MAX: u32 = 8;  // verify against existing constant in processing.rs
+/// Soft cap on per-smelter queue. Prevents the belt from feeding indefinitely
+/// while the smelter is processing the same ore. 8 = roughly 16 seconds of
+/// pre-buffered work at SMELT_DURATION_S = 2.0.
+const SMELTER_QUEUE_CAP: u32 = 8;
 
-/// For each smelter, scan 4 cardinal sides for adjacent belts. Belts pointing
-/// INTO the smelter feed it (queue gains one ore). Belts pointing AWAY get a
-/// bar pushed onto them (output buffer drains one bar). One in + one out per
-/// smelter per tick. Priority order: N, E, S, W.
+/// For each smelter, scan 4 cardinal sides for adjacent belts.
+/// - Belts pointing INTO the smelter feed it: pulls one ore per tick total.
+///   - Idle smelter: starts smelting that ore (sets recipe + queue=1 + time_left).
+///   - Busy with same recipe: queue += 1 (up to SMELTER_QUEUE_CAP).
+///   - Busy with different recipe: do NOT pull (item stays on belt → back-pressure).
+/// - Belts pointing AWAY get a bar pushed onto them: pushes one bar per tick.
+/// Priority order: N, E, S, W on both pull and push (deterministic).
 pub fn smelter_belt_io_system(
     mut belts_q: Query<(&Transform, &mut BeltTile)>,
     mut smelters_q: Query<(&Transform, &mut SmelterState)>,
 ) {
-    use std::collections::HashMap;
-    // Index belts by tile coord, but borrow as &mut later — store positions and
-    // resolve indices via the original query iter_mut.
-    let belt_positions: HashMap<bevy::math::IVec2, BeltDir> = belts_q
+    use std::collections::BTreeMap;
+    // Snapshot belt positions/dirs (we'll do a second iter_mut to write).
+    let belt_positions: BTreeMap<bevy::math::IVec2, BeltDir> = belts_q
         .iter()
         .map(|(xf, bt)| (world_to_tile(xf.translation.truncate()), bt.dir))
         .collect();
@@ -1171,67 +1360,92 @@ pub fn smelter_belt_io_system(
     for (smelter_xf, mut state) in smelters_q.iter_mut() {
         let smelter_pos = world_to_tile(smelter_xf.translation.truncate());
 
-        // Pull (input): for each cardinal side, if adjacent belt points INTO us, consume one.
-        for &dir in &[BeltDir::North, BeltDir::East, BeltDir::South, BeltDir::West] {
-            // Adjacent tile sits in `dir` direction from us; the belt there points INTO
-            // us iff its dir == dir.opposite() (i.e., its delta brings it from neighbor → us).
-            let neighbor_pos = smelter_pos + dir.delta();
+        // ---- Pull (input) ----
+        // At most one ore per smelter per tick; first matching side in N,E,S,W order.
+        for &side in &[BeltDir::North, BeltDir::East, BeltDir::South, BeltDir::West] {
+            let neighbor_pos = smelter_pos + side.delta();
             let Some(neighbor_dir) = belt_positions.get(&neighbor_pos) else { continue };
-            if *neighbor_dir != dir.opposite() { continue };  // not pointing into us
+            // Belt points INTO smelter iff its dir == side.opposite()
+            // (e.g., neighbor sits to my North; for it to feed me, its dir must be South).
+            if *neighbor_dir != side.opposite() { continue }
 
-            // Smelter has space?
-            if state.queue >= QUEUE_MAX { break };  // can't take more this tick
-
-            // Find the belt entity and check + consume its item.
+            // Find the belt's actual entity to read its item and clear it.
+            // We iterate the mutable query and match by tile position.
+            let mut consumed = false;
             for (belt_xf, mut belt_tile) in belts_q.iter_mut() {
-                if world_to_tile(belt_xf.translation.truncate()) != neighbor_pos { continue };
-                let Some(item) = belt_tile.item else { break };  // empty belt
-                let ItemKind::Ore(ore) = item else { break };    // not an ore (smelter rejects bars)
-                belt_tile.item = None;
-                state.queue += 1;
-                if state.recipe.is_none() {
-                    state.recipe = Some(ore);
-                    state.time_left = processing::SMELT_TIME_SECONDS;  // verify constant name
+                if world_to_tile(belt_xf.translation.truncate()) != neighbor_pos { continue }
+                let Some(item) = belt_tile.item else { break }; // empty belt
+                let ItemKind::Ore(ore) = item else { break };   // bars don't feed the smelter
+
+                // Decide based on smelter state.
+                match state.recipe {
+                    None => {
+                        // Idle smelter: start smelting this ore.
+                        state.recipe = Some(ore);
+                        state.queue = 1;
+                        state.time_left = processing::SMELT_DURATION_S;
+                        belt_tile.item = None;
+                        consumed = true;
+                    }
+                    Some(current) if current == ore && state.queue < SMELTER_QUEUE_CAP => {
+                        // Same recipe, has capacity: extend the queue.
+                        state.queue += 1;
+                        belt_tile.item = None;
+                        consumed = true;
+                    }
+                    _ => {
+                        // Wrong recipe (busy with different ore) or queue cap hit:
+                        // leave the item on the belt (back-pressure).
+                    }
                 }
                 break;
             }
-            break;  // at most one input per tick
+            if consumed { break }   // at most one input per smelter per tick
         }
 
-        // Push (output): for each cardinal side, if adjacent belt points AWAY from us
-        // and is empty, push a bar onto it.
-        let has_output: bool = state.output.values().any(|&n| n > 0);
-        if !has_output { continue };
+        // ---- Push (output) ----
+        // At most one bar per smelter per tick; first eligible side in N,E,S,W order.
+        let has_output = state.output.values().any(|&n| n > 0);
+        if !has_output { continue }
 
-        for &dir in &[BeltDir::North, BeltDir::East, BeltDir::South, BeltDir::West] {
-            let neighbor_pos = smelter_pos + dir.delta();
+        for &side in &[BeltDir::North, BeltDir::East, BeltDir::South, BeltDir::West] {
+            let neighbor_pos = smelter_pos + side.delta();
             let Some(neighbor_dir) = belt_positions.get(&neighbor_pos) else { continue };
-            if *neighbor_dir != dir { continue };  // not pointing AWAY from us
+            // Belt points AWAY from smelter iff its dir == side
+            // (e.g., neighbor sits to my East and faces East — moving items further east).
+            if *neighbor_dir != side { continue }
 
-            // Find the belt and check empty.
+            // Find the belt and try to push a bar.
+            let mut pushed = false;
             for (belt_xf, mut belt_tile) in belts_q.iter_mut() {
-                if world_to_tile(belt_xf.translation.truncate()) != neighbor_pos { continue };
-                if belt_tile.item.is_some() { break };  // belt slot occupied
+                if world_to_tile(belt_xf.translation.truncate()) != neighbor_pos { continue }
+                if belt_tile.item.is_some() { break }   // belt slot occupied
 
-                // Pull a bar from output buffer (first non-zero ore in BTreeMap iteration).
+                // Pick a bar — first non-zero ore in BTreeMap iteration order
+                // (Copper < Silver < Gold per OreKind variant order).
                 let mut to_drain: Option<OreKind> = None;
                 for (&ore, &n) in state.output.iter() {
-                    if n > 0 { to_drain = Some(ore); break };
+                    if n > 0 { to_drain = Some(ore); break }
                 }
                 let Some(ore) = to_drain else { break };
                 if let Some(n) = state.output.get_mut(&ore) {
                     *n -= 1;
+                    if *n == 0 { state.output.remove(&ore); }
                 }
                 belt_tile.item = Some(ItemKind::Bar(ore));
+                pushed = true;
                 break;
             }
-            break;  // at most one output per tick
+            if pushed { break }   // at most one output per smelter per tick
         }
     }
 }
 ```
 
-(The implementer should verify `QUEUE_MAX` and `SMELT_TIME_SECONDS` against the actual constants in `src/processing.rs` and adjust if names differ.)
+**Algorithm notes:**
+- Recipe-mismatch back-pressure (item stays on belt) is the M5a-MVP behavior — players will discover that putting different ore types into one smelter causes a jam. M5b can introduce per-ore smelters or a smelter that can switch recipes mid-stream.
+- `SMELTER_QUEUE_CAP = 8` is a soft cap. The existing single-player UI path (`handle_smelter_buttons_system`) bypasses this cap (it sets `queue = count` directly via `start_smelting`). That's fine; the cap only governs the BELT pull rate.
+- `state.output.remove(&ore)` when the count hits zero keeps the BTreeMap small. Optional but cleaner.
 
 - [ ] **Step 2: Register system + set in `src/app.rs`**
 
@@ -1248,7 +1462,7 @@ app.add_systems(Update, crate::systems::belt::smelter_belt_io_system
 cargo build 2>&1 | tail -10
 cargo test 2>&1 | grep "test result"
 ```
-Expected: 113 tests still passing.
+Expected: 117 tests still passing.
 
 - [ ] **Step 4: Commit**
 
@@ -1311,9 +1525,18 @@ pub struct SaveData {
 
 Update `save::collect` to take a belts iterator (or a Vec) and include it in the SaveData. Update the helper signature in `save_load.rs`'s caller to pass it.
 
-Update `save::apply` to take a `commands: &mut Commands` parameter (or have the save_load.rs caller despawn old + spawn new). Cleanest: `apply` takes the parsed SaveData and mutates everything in-place EXCEPT belts; belts are returned via a new field on the result, and the caller (save_load.rs systems) does the despawn-and-respawn since it has access to Commands.
+**Pick this approach (don't waste cycles on alternatives):** `save::apply` returns `Vec<(IVec2, BeltTile)>` (the loaded belts), and the calling Bevy system (in save_load.rs) does the despawn-old + spawn-new with `Commands`. This keeps `save::apply` pure (no `&mut Commands` parameter, no Bevy entity churn inside the save module).
 
-Alternative: `apply` returns `Vec<(IVec2, BeltTile)>` and the caller spawns. This is cleaner because it avoids passing `&mut Commands` into pure save logic.
+Concrete signature change:
+```rust
+// Before:
+pub fn apply(data: SaveData, grid: &mut Grid, inventory: &mut Inventory, ...) { ... }
+// After:
+pub fn apply(data: SaveData, grid: &mut Grid, inventory: &mut Inventory, ...) -> Vec<(IVec2, BeltTile)> {
+    // ... existing in-place mutations ...
+    data.belts  // return the loaded belt list for the caller to spawn
+}
+```
 
 - [ ] **Step 2: Update save_load.rs systems**
 
@@ -1370,7 +1593,7 @@ fn version_3_rejects_v2_saves() {
 cargo build 2>&1 | tail -10
 cargo test 2>&1 | grep "test result"
 ```
-Expected: 113 + 3 = 116 tests passing. Existing save tests now updated for the new field.
+Expected: 117 + 3 = 120 tests passing. Existing save tests now updated for the new field.
 
 - [ ] **Step 6: Commit**
 
@@ -1445,7 +1668,7 @@ cargo test --test net_events 2>&1 | tail -10
 ```bash
 cargo test 2>&1 | grep "test result"
 ```
-Expected: 116 + 2 = 118 tests passing.
+Expected: 120 + 2 = 122 tests passing.
 
 - [ ] **Step 6: Commit**
 
@@ -1552,26 +1775,96 @@ pub fn handle_remove_belt_requests(
 
 Register both with `.run_if(server_running)` in the existing handler tuple in `MultiplayerPlugin::build`.
 
-- [ ] **Step 3: Branch belt_ui on NetMode**
+- [ ] **Step 3: Branch belt_ui on NetMode + share validation**
 
-In `src/systems/belt_ui.rs::belt_place_system`, add `net_mode: Res<crate::net::NetMode>` and `mut place_writer: EventWriter<crate::systems::net_events::PlaceBeltRequest>` parameters. After computing `tile` and BEFORE spawning, branch:
+The validation rules ("tile is in-bounds, floor, no existing belt, no machine") need to fire in two places: client-side `belt_place_system` (single-player + host direct-mutation path) and server-side `handle_place_belt_requests`. Both take Bevy queries as their natural input shape, so a Bevy-system-aware helper isn't pure.
+
+**Strategy:** add a small pure helper in `src/belt.rs` that takes already-collected occupancy data:
 
 ```rust
-if matches!(*net_mode, crate::net::NetMode::Client { .. }) {
-    place_writer.send(PlaceBeltRequest { tile, dir });
-    return;
+// In src/belt.rs (append to Task 1's content):
+use std::collections::BTreeSet;
+
+/// Validate a candidate belt placement. Pure — caller projects World state
+/// into the (occupied tiles, grid solidity) inputs.
+pub fn can_place_belt(
+    tile: bevy::math::IVec2,
+    in_bounds_and_floor: bool,
+    occupied_tiles: &BTreeSet<bevy::math::IVec2>,
+) -> bool {
+    in_bounds_and_floor && !occupied_tiles.contains(&tile)
 }
-// SinglePlayer / Host: spawn directly (existing code path)
-// validation + commands.spawn((BeltTile::new(dir), ...))
 ```
 
-But wait — the host should ALSO validate (same as the server-side handler does). Since the host's spawn path is the existing direct-mutation flow, validation already runs in `validate_belt_placement`. Same in `handle_place_belt_requests`. The two paths use the SAME validation logic; consider extracting `validate_belt_placement` to be shared.
+(Add a 1-2 unit tests for `can_place_belt` to `tests/belt.rs` while you're here — bumps the count to ~18.)
 
-For the same-validation: keep `validate_belt_placement` in belt_ui.rs as `pub(crate) fn`, and have `handle_place_belt_requests` import and call it. But `handle_place_belt_requests` lives in net_plugin.rs which can't easily import from belt_ui.rs without exposing internals. Cleanest: move `validate_belt_placement` to `src/belt.rs` (the pure module) so both UI and net handler can use it. Update Task 1's pure module if needed (or amend in this task).
+Then both call sites project into that shape:
+- `belt_place_system`: `let in_bounds_and_floor = grid.get(tile.x, tile.y).is_some_and(|g| !g.solid);` and build `occupied: BTreeSet<IVec2>` from belts + shops + smelters queries.
+- `handle_place_belt_requests`: same projection from the server-side queries.
 
-Same pattern for `belt_remove_system`: branch on `Client`, fire `RemoveBeltRequest`, return.
+In `belt_place_system`, also add the NetMode branch. Final shape:
+
+```rust
+pub fn belt_place_system(
+    mut commands: Commands,
+    build_mode: Res<BeltBuildMode>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    win_q: Query<&Window, With<PrimaryWindow>>,
+    cam_q: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    grid_q: Option<Single<&Grid>>,
+    belts_q: Query<&Transform, With<BeltTile>>,
+    shops_q: Query<&Transform, With<Shop>>,
+    smelters_q: Query<&Transform, With<Smelter>>,
+    net_mode: Res<crate::net::NetMode>,
+    mut place_writer: EventWriter<crate::systems::net_events::PlaceBeltRequest>,
+) {
+    let Some(dir) = build_mode.cursor_dir else { return };
+    if !mouse.just_pressed(MouseButton::Left) { return }
+
+    let Ok(win) = win_q.get_single() else { return };
+    let Some(cursor_screen) = win.cursor_position() else { return };
+    let Ok((cam, cam_xf)) = cam_q.get_single() else { return };
+    let Ok(cursor_world) = cam.viewport_to_world_2d(cam_xf, cursor_screen) else { return };
+    let tile = world_to_tile(cursor_world);
+
+    if matches!(*net_mode, crate::net::NetMode::Client { .. }) {
+        place_writer.send(crate::systems::net_events::PlaceBeltRequest { tile, dir });
+        return;
+    }
+
+    // SinglePlayer / Host: validate + spawn directly.
+    let Some(grid) = grid_q else { return };
+    let grid = grid.into_inner();
+    let in_bounds_and_floor = grid.get(tile.x, tile.y).is_some_and(|g| !g.solid);
+    let occupied: std::collections::BTreeSet<bevy::math::IVec2> = belts_q.iter()
+        .chain(shops_q.iter())
+        .chain(smelters_q.iter())
+        .map(|xf| world_to_tile(xf.translation.truncate()))
+        .collect();
+    if !belt::can_place_belt(tile, in_bounds_and_floor, &occupied) { return }
+
+    let center = tile_center_world(tile);
+    commands.spawn((
+        BeltTile::new(dir),
+        BeltVisual::Straight,  // recomputed by belt_visual_recompute_system next frame
+        Sprite {
+            color: belt_color(dir),
+            custom_size: Some(Vec2::splat(TILE_SIZE_PX)),
+            ..default()
+        },
+        Transform::from_translation(center.extend(3.0)),
+        bevy_replicon::prelude::Replicated,  // inert in single-player; needed in Host mode
+    ));
+}
+```
+
+Note: `belt_color` is the existing helper in belt_ui.rs. The `Replicated` import goes at the top of belt_ui.rs (the M4 lesson: `Replicated` is inert without RepliconPlugins, safe to add unconditionally — same pattern setup.rs uses for the host's player).
+
+Same pattern for `belt_remove_system`: add `net_mode` + `RemoveBeltRequest` writer, branch on `Client` (fire event + return), otherwise existing direct-despawn path.
 
 For Host mode: the host's local clicks go through the direct-spawn path (just like dig + buy + sell in M4). The server-side `handle_place_belt_requests` only fires for events from REMOTE clients (the host's own player has no `OwningClient`).
+
+**Update Task 3's spawn:** the original Task 3 spawn snippet lacks `Replicated`. Add it there too (alternatively, fold this addition into Task 10 as a one-line tweak to belt_ui.rs's spawn tuple — either works). The plan is now showing the corrected version above; if Task 3 was already implemented, this edit lands as part of the Task 10 commit.
 
 - [ ] **Step 4: Add `add_belt_visuals_on_arrival` system**
 
@@ -1616,7 +1909,7 @@ Register in `MultiplayerPlugin::build` (Update, no run-condition — `Added<Belt
 cargo build 2>&1 | tail -20
 cargo test 2>&1 | grep "test result"
 ```
-Expected: 118 tests still passing. Build clean.
+Expected: 122 tests still passing. Build clean.
 
 - [ ] **Step 6: Commit**
 
@@ -1663,7 +1956,7 @@ If any item fails, surface to controller for triage before Task 11.
 ```bash
 cargo test 2>&1 | grep "test result"
 ```
-Expected: ~118 tests passing across all suites.
+Expected: ~122 tests passing across all suites.
 
 - [ ] **Step 2: Manual exit-criteria walkthrough**
 
