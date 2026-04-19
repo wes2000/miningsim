@@ -1,8 +1,9 @@
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 use crate::items::{ItemKind, OreKind};
 use crate::tools::Tool;
 
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
 pub struct Player;
 
 /// The player entity controlled by this client. Exactly one in any session.
