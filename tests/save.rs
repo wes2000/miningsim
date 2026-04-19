@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use miningsim::economy::Money;
 use miningsim::grid::{Grid, Layer, Tile};
