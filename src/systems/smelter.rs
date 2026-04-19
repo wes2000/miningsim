@@ -6,6 +6,7 @@ use crate::coords::TILE_SIZE_PX;
 use crate::inventory::Inventory;
 use crate::items::{ItemKind, OreKind, ALL_ORES};
 use crate::processing::{self, is_busy, SmelterState};
+use crate::systems::net_events::{CollectAllRequest, SmeltAllRequest};
 
 pub const SMELTER_INTERACT_RADIUS_TILES: f32 = 2.0;
 
@@ -197,23 +198,35 @@ pub fn handle_smelter_buttons_system(
     interaction_q: Query<(&Interaction, &SmelterButtonKind), Changed<Interaction>>,
     local_inv: Single<&mut Inventory, With<LocalPlayer>>,
     mut state_q: Query<&mut SmelterState>,
+    net_mode: Res<crate::net::NetMode>,
+    mut smelt_writer: EventWriter<SmeltAllRequest>,
+    mut collect_writer: EventWriter<CollectAllRequest>,
 ) {
     if !ui_open.0 { return; }
+    let is_client = matches!(*net_mode, crate::net::NetMode::Client { .. });
     let Ok(mut state) = state_q.get_single_mut() else { return };
     let mut inv = local_inv.into_inner();
     for (interaction, kind) in interaction_q.iter() {
         if *interaction != Interaction::Pressed { continue; }
         match kind {
             SmelterButtonKind::SmeltAll(ore) => {
-                let count = inv.get(ItemKind::Ore(*ore));
-                if count == 0 || is_busy(&state) { continue; }
-                inv.remove(ItemKind::Ore(*ore), count);
-                processing::start_smelting(&mut state, *ore, count);
+                if is_client {
+                    smelt_writer.send(SmeltAllRequest { ore: *ore });
+                } else {
+                    let count = inv.get(ItemKind::Ore(*ore));
+                    if count == 0 || is_busy(&state) { continue; }
+                    inv.remove(ItemKind::Ore(*ore), count);
+                    processing::start_smelting(&mut state, *ore, count);
+                }
             }
             SmelterButtonKind::CollectAll => {
-                let drained = processing::collect_output(&mut state);
-                for (ore, n) in drained {
-                    inv.add(ItemKind::Bar(ore), n);
+                if is_client {
+                    collect_writer.send(CollectAllRequest);
+                } else {
+                    let drained = processing::collect_output(&mut state);
+                    for (ore, n) in drained {
+                        inv.add(ItemKind::Bar(ore), n);
+                    }
                 }
             }
         }

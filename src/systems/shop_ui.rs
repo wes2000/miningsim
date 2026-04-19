@@ -4,6 +4,7 @@ use crate::economy::{self, Money};
 use crate::inventory::Inventory;
 use crate::tools::{OwnedTools, Tool};
 use crate::systems::hud::current_tool_display_name;
+use crate::systems::net_events::{BuyToolRequest, SellAllRequest};
 
 pub fn spawn_shop_ui(mut commands: Commands) {
     commands
@@ -125,22 +126,34 @@ pub fn handle_shop_buttons_system(
     ui_open: Res<ShopUiOpen>,
     interaction_q: Query<(&Interaction, &ShopButtonKind), Changed<Interaction>>,
     local_player: Single<(&mut Money, &mut Inventory, &mut OwnedTools), With<LocalPlayer>>,
+    net_mode: Res<crate::net::NetMode>,
+    mut sell_writer: EventWriter<SellAllRequest>,
+    mut buy_writer: EventWriter<BuyToolRequest>,
 ) {
     // Defense-in-depth: Bevy does not deliver Interaction events for hidden UI,
     // but guard here in case system ordering changes or the UI is force-hidden
     // mid-frame.
     if !ui_open.0 { return; }
+    let is_client = matches!(*net_mode, crate::net::NetMode::Client { .. });
     let (mut money, mut inv, mut owned) = local_player.into_inner();
     for (interaction, kind) in interaction_q.iter() {
         if *interaction != Interaction::Pressed { continue; }
         match kind {
             ShopButtonKind::SellAll => {
-                economy::sell_all(&mut inv, &mut money);
+                if is_client {
+                    sell_writer.send(SellAllRequest);
+                } else {
+                    economy::sell_all(&mut inv, &mut money);
+                }
             }
             ShopButtonKind::Buy(tool) => {
-                let _ = economy::try_buy(*tool, &mut money, &mut owned);
-                // BuyResult::Ok / NotEnoughMoney / AlreadyOwned handled silently;
-                // UI labels update via Changed<Money> / Changed<OwnedTools>.
+                if is_client {
+                    buy_writer.send(BuyToolRequest { tool: *tool });
+                } else {
+                    let _ = economy::try_buy(*tool, &mut money, &mut owned);
+                    // BuyResult::Ok / NotEnoughMoney / AlreadyOwned handled silently;
+                    // UI labels update via Changed<Money> / Changed<OwnedTools>.
+                }
             }
         }
     }

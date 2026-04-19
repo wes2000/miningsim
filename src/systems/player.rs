@@ -7,6 +7,7 @@ use crate::grid::Grid;
 use crate::items::ItemKind;
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
 use crate::systems::hud::item_color;
+use crate::systems::net_events::DigRequest;
 
 #[derive(Resource)]
 pub struct DigCooldown(pub Timer);
@@ -134,6 +135,8 @@ pub fn dig_input_system(
     chunks_q: Query<(Entity, &TerrainChunk)>,
     owned_tools: Single<&crate::tools::OwnedTools, With<crate::components::LocalPlayer>>,
     time: Res<Time>,
+    net_mode: Res<crate::net::NetMode>,
+    mut dig_writer: EventWriter<DigRequest>,
 ) {
     cooldown.0.tick(time.delta());
     let mut grid = grid.into_inner();
@@ -173,6 +176,12 @@ pub fn dig_input_system(
         // Player owns nothing that can break this layer. Clunk; no cooldown reset.
         return;
     };
+
+    if matches!(*net_mode, crate::net::NetMode::Client { .. }) {
+        dig_writer.send(DigRequest { target: target_tile });
+        cooldown.0.reset();
+        return;
+    }
 
     let result = dig::try_dig(&mut grid, target_tile, tool);
     match result.status {
