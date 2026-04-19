@@ -108,8 +108,8 @@ src/
   items.rs                      # NEW: pub OreKind, pub ItemKind, ALL_ORES, ALL_ITEMS
   processing.rs                 # NEW: SmelterState, tick_smelter, start_smelting, collect_output, is_busy, SMELT_DURATION_S
   components.rs                 # MODIFY: Smelter, SmelterUiRoot, SmelterButtonKind, SmelterStatusText markers; SmelterUiOpen resource
+  coords.rs                     # NEW: world_to_tile, tile_min_world, tile_center_world (PURE — at crate root, not under systems/)
   systems/
-    coords.rs                   # NEW: world_to_tile, tile_min_world, tile_center_world
     setup.rs                    # MODIFY: spawn Smelter entity; use coords helpers
     player.rs                   # MODIFY: ItemKind in OreDrop spawn; coords helpers
     chunk_lifecycle.rs          # MODIFY: coords helpers
@@ -268,11 +268,16 @@ pub fn sell_all(inv: &mut Inventory, money: &mut Money) {
 
 `tool_buy_price` and `try_buy` unchanged.
 
-### `coords.rs` (new, pure)
+### `coords.rs` (new, pure — `src/coords.rs`, not under `systems/`)
+
+`TILE_SIZE_PX` migrates from `systems::setup` into `coords.rs` so this
+module has no upward dependency on `systems::*`. `setup.rs` (and any
+other site referencing the constant) imports it from `coords` instead.
 
 ```rust
 use bevy::math::{IVec2, Vec2};
-use crate::systems::setup::TILE_SIZE_PX;     // or move TILE_SIZE_PX into coords.rs
+
+pub const TILE_SIZE_PX: f32 = 16.0;
 
 pub fn world_to_tile(world: Vec2) -> IVec2 {
     IVec2::new(
@@ -323,9 +328,15 @@ Mirrors the shop systems pattern:
 - `spawn_smelter_ui` (Startup) — builds the panel hidden, with status
   label, three SmeltAll buttons, output line label, CollectAll button.
 - `sync_smelter_visibility_system` — mirrors `SmelterUiOpen` state.
-- `update_smelter_panel_system` — runs on `Changed<SmelterState>` or
-  `Changed<Inventory>`. Refreshes status text, button enabled/disabled
-  visuals, output line, CollectAll enabled state.
+- `update_smelter_panel_system` — early-returns unless either
+  `state.is_changed()` (queried via `Query<&SmelterState, Changed<SmelterState>>`
+  or by inspecting the queried single in-place) or `inventory.is_changed()`
+  (resource change-detection). Refreshes status text, button
+  enabled/disabled visuals, output line, CollectAll enabled state.
+  Note: `tick_smelter` mutates `time_left` every frame while busy, which
+  is detected as a change — so the status countdown text refreshes once
+  per frame during processing. That's intended; do NOT add a refresh
+  throttle on the assumption that it's a bug.
 - `handle_smelter_buttons_system` — gates on `SmelterUiOpen.0`; on
   `SmeltAll(ore)` Pressed: read inventory count, remove all, call
   `start_smelting`. On `CollectAll` Pressed: `collect_output(&mut state)`,
