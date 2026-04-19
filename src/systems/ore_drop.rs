@@ -21,7 +21,7 @@ pub fn ore_drop_system(
         let to_player = player_pos - t.translation.truncate();
         let dist = to_player.length();
         if dist < PICKUP_DISTANCE_PX {
-            inv.add(drop.ore, 1);
+            inv.add(drop.item, 1);
             commands.entity(entity).despawn();
             continue;
         }

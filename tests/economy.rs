@@ -1,14 +1,13 @@
 use miningsim::economy::{self, BuyResult, Money};
-use miningsim::grid::OreType;
 use miningsim::inventory::Inventory;
+use miningsim::items::{ItemKind, OreKind};
 use miningsim::tools::{Tool, OwnedTools};
 
 #[test]
 fn ore_sell_prices_match_spec() {
-    assert_eq!(economy::ore_sell_price(OreType::None), 0);
-    assert_eq!(economy::ore_sell_price(OreType::Copper), 1);
-    assert_eq!(economy::ore_sell_price(OreType::Silver), 5);
-    assert_eq!(economy::ore_sell_price(OreType::Gold), 20);
+    assert_eq!(economy::item_sell_price(ItemKind::Ore(OreKind::Copper)), 1);
+    assert_eq!(economy::item_sell_price(ItemKind::Ore(OreKind::Silver)), 5);
+    assert_eq!(economy::item_sell_price(ItemKind::Ore(OreKind::Gold)), 20);
 }
 
 #[test]
@@ -22,15 +21,15 @@ fn tool_buy_prices_match_spec() {
 #[test]
 fn sell_all_converts_mixed_inventory_and_zeros_counts() {
     let mut inv = Inventory::default();
-    inv.add(OreType::Copper, 5);    //  5 * 1 =  5
-    inv.add(OreType::Silver, 3);    //  3 * 5 = 15
-    inv.add(OreType::Gold, 2);      //  2 * 20 = 40
+    inv.add(ItemKind::Ore(OreKind::Copper), 5);    //  5 * 1 =  5
+    inv.add(ItemKind::Ore(OreKind::Silver), 3);    //  3 * 5 = 15
+    inv.add(ItemKind::Ore(OreKind::Gold), 2);      //  2 * 20 = 40
     let mut money = Money::default();
     economy::sell_all(&mut inv, &mut money);
     assert_eq!(money.0, 60);
-    assert_eq!(inv.get(OreType::Copper), 0);
-    assert_eq!(inv.get(OreType::Silver), 0);
-    assert_eq!(inv.get(OreType::Gold), 0);
+    assert_eq!(inv.get(ItemKind::Ore(OreKind::Copper)), 0);
+    assert_eq!(inv.get(ItemKind::Ore(OreKind::Silver)), 0);
+    assert_eq!(inv.get(ItemKind::Ore(OreKind::Gold)), 0);
 }
 
 #[test]
@@ -77,4 +76,18 @@ fn try_buy_exact_cost_succeeds_and_zeros_money() {
     let r = economy::try_buy(Tool::Pickaxe, &mut money, &mut owned);
     assert_eq!(r, BuyResult::Ok);
     assert_eq!(money.0, 0);
+}
+
+#[test]
+fn sell_all_sums_ores_and_bars() {
+    let mut inv = Inventory::default();
+    inv.add(ItemKind::Ore(OreKind::Copper), 5);    //  5 *  1 =  5
+    inv.add(ItemKind::Bar(OreKind::Copper), 3);    //  3 *  5 = 15
+    inv.add(ItemKind::Bar(OreKind::Gold), 1);      //  1 * 100 = 100
+    let mut money = Money::default();
+    economy::sell_all(&mut inv, &mut money);
+    assert_eq!(money.0, 120);
+    for item in miningsim::items::ALL_ITEMS {
+        assert_eq!(inv.get(item), 0);
+    }
 }

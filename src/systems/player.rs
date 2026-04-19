@@ -3,9 +3,10 @@ use bevy::window::PrimaryWindow;
 use crate::components::{ChunkDirty, Facing, OreDrop, Player, TerrainChunk, Velocity};
 use crate::coords::{self, TILE_SIZE_PX};
 use crate::dig::{self, DigStatus};
-use crate::grid::{Grid, OreType};
+use crate::grid::Grid;
+use crate::items::ItemKind;
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
-use crate::systems::hud::ore_visual_color;
+use crate::systems::hud::item_color;
 
 #[derive(Resource)]
 pub struct DigCooldown(pub Timer);
@@ -187,16 +188,19 @@ pub fn dig_input_system(
                 }
             }
             // Spawn ore drop only on full break.
-            if result.status == DigStatus::Broken && result.ore != OreType::None {
-                commands.spawn((
-                    OreDrop { ore: result.ore },
-                    Sprite {
-                        color: ore_visual_color(result.ore),
-                        custom_size: Some(Vec2::splat(6.0)),
-                        ..default()
-                    },
-                    Transform::from_translation(tile_center.extend(5.0)),
-                ));
+            if result.status == DigStatus::Broken {
+                if let Some(ore) = result.ore {
+                    let item = ItemKind::Ore(ore);
+                    commands.spawn((
+                        OreDrop { item },
+                        Sprite {
+                            color: item_color(item),
+                            custom_size: Some(Vec2::splat(6.0)),
+                            ..default()
+                        },
+                        Transform::from_translation(tile_center.extend(5.0)),
+                    ));
+                }
             }
         }
         _ => { /* OutOfBounds / AlreadyEmpty / UnderTier / Blocked — no cooldown reset */ }

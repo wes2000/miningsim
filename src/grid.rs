@@ -7,25 +7,17 @@ pub enum Layer {
     Bedrock,  // map boundary, never breakable
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum OreType {
-    None,
-    Copper,
-    Silver,
-    Gold,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Tile {
     pub solid: bool,
     pub layer: Layer,
-    pub ore: OreType,
+    pub ore: Option<crate::items::OreKind>,
     pub damage: u8,  // strikes accumulated; 0 on fresh / broken tile
 }
 
 impl Default for Tile {
     fn default() -> Self {
-        Self { solid: true, layer: Layer::Dirt, ore: OreType::None, damage: 0 }
+        Self { solid: true, layer: Layer::Dirt, ore: None, damage: 0 }
     }
 }
 

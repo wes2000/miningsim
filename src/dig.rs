@@ -1,6 +1,7 @@
 use bevy::prelude::IVec2;
 
-use crate::grid::{Grid, OreType, Tile};
+use crate::grid::{Grid, Tile};
+use crate::items::OreKind;
 use crate::tools::{self, Tool};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,7 +17,7 @@ pub enum DigStatus {
 #[derive(Debug, Clone, Copy)]
 pub struct DigResult {
     pub status: DigStatus,
-    pub ore: OreType,
+    pub ore: Option<OreKind>,
 }
 
 pub fn try_dig(grid: &mut Grid, target: IVec2, tool: Tool) -> DigResult {
@@ -24,25 +25,25 @@ pub fn try_dig(grid: &mut Grid, target: IVec2, tool: Tool) -> DigResult {
     let y = target.y;
 
     let tile = match grid.get(x, y) {
-        None => return DigResult { status: DigStatus::OutOfBounds, ore: OreType::None },
+        None => return DigResult { status: DigStatus::OutOfBounds, ore: None },
         Some(t) => *t,
     };
     if !tile.solid {
-        return DigResult { status: DigStatus::AlreadyEmpty, ore: OreType::None };
+        return DigResult { status: DigStatus::AlreadyEmpty, ore: None };
     }
     let Some(required) = tools::clicks_required(tool, tile.layer) else {
-        return DigResult { status: DigStatus::UnderTier, ore: OreType::None };
+        return DigResult { status: DigStatus::UnderTier, ore: None };
     };
 
     let new_damage = tile.damage + 1;
     if new_damage >= required {
         // Break tile.
         let ore = tile.ore;
-        grid.set(x, y, Tile { solid: false, layer: tile.layer, ore: OreType::None, damage: 0 });
+        grid.set(x, y, Tile { solid: false, layer: tile.layer, ore: None, damage: 0 });
         DigResult { status: DigStatus::Broken, ore }
     } else {
         grid.set(x, y, Tile { damage: new_damage, ..tile });
-        DigResult { status: DigStatus::Damaged, ore: OreType::None }
+        DigResult { status: DigStatus::Damaged, ore: None }
     }
 }
 

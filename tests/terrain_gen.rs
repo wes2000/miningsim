@@ -1,4 +1,5 @@
-use miningsim::grid::{Grid, Layer, OreType};
+use miningsim::grid::Layer;
+use miningsim::items::OreKind;
 use miningsim::terrain_gen;
 
 #[test]
@@ -67,7 +68,7 @@ fn spawn_pocket_is_carved() {
     }
     let floor_t = g.get(sp.0, sp.1 + 2).unwrap();
     assert!(floor_t.solid);
-    assert_eq!(floor_t.ore, OreType::None);
+    assert_eq!(floor_t.ore, None);
 }
 
 #[test]
@@ -90,10 +91,10 @@ fn ore_distribution_in_tolerance() {
     for y in 0..g.height() as i32 {
         for x in 0..g.width() as i32 {
             match g.get(x, y).unwrap().ore {
-                OreType::Copper => copper += 1,
-                OreType::Silver => silver += 1,
-                OreType::Gold => gold += 1,
-                OreType::None => {}
+                Some(OreKind::Copper) => copper += 1,
+                Some(OreKind::Silver) => silver += 1,
+                Some(OreKind::Gold) => gold += 1,
+                None => {}
             }
         }
     }
@@ -105,4 +106,3 @@ fn ore_distribution_in_tolerance() {
     assert!(gold > 0,   "expected some gold");
     assert!(copper > gold, "copper should be more common than gold ({} vs {})", copper, gold);
 }
-

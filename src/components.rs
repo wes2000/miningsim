@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::grid::OreType;
+use crate::items::{ItemKind, OreKind};
 use crate::tools::Tool;
 
 #[derive(Component)]
@@ -29,12 +29,12 @@ pub struct ChunkDirty;
 
 #[derive(Component)]
 pub struct OreSprite {
-    pub ore: OreType,
+    pub ore: OreKind,
 }
 
 #[derive(Component)]
 pub struct OreDrop {
-    pub ore: OreType,
+    pub item: ItemKind,
 }
 
 #[derive(Component)]

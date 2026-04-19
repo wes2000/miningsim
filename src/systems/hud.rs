@@ -1,20 +1,28 @@
 use bevy::prelude::*;
 use crate::components::{MoneyText, CurrentToolText};
 use crate::economy::Money;
-use crate::grid::OreType;
 use crate::inventory::Inventory;
+use crate::items::{ItemKind, OreKind, ALL_ITEMS};
 use crate::tools::{OwnedTools, Tool};
 
 #[derive(Component)]
-pub struct OreCountText(pub OreType);
+pub struct ItemCountText(pub ItemKind);
 
-pub fn ore_visual_color(o: OreType) -> Color {
-    match o {
-        OreType::None   => Color::WHITE,
-        OreType::Copper => Color::srgb(0.85, 0.45, 0.20),
-        OreType::Silver => Color::srgb(0.85, 0.85, 0.92),
-        OreType::Gold   => Color::srgb(0.95, 0.78, 0.25),
+pub fn item_color(item: ItemKind) -> Color {
+    match item {
+        ItemKind::Ore(OreKind::Copper) => Color::srgb(0.85, 0.45, 0.20),
+        ItemKind::Ore(OreKind::Silver) => Color::srgb(0.85, 0.85, 0.92),
+        ItemKind::Ore(OreKind::Gold)   => Color::srgb(0.95, 0.78, 0.25),
+        ItemKind::Bar(OreKind::Copper) => Color::srgb(0.95, 0.55, 0.30),
+        ItemKind::Bar(OreKind::Silver) => Color::srgb(0.95, 0.95, 1.00),
+        ItemKind::Bar(OreKind::Gold)   => Color::srgb(1.00, 0.88, 0.40),
     }
+}
+
+/// Color helper for raw ore tiles in the world (terrain rendering, drop sprites
+/// when only the OreKind is known).
+pub fn ore_visual_color(o: OreKind) -> Color {
+    item_color(ItemKind::Ore(o))
 }
 
 pub fn current_tool_display_name(t: Tool) -> &'static str {
@@ -36,11 +44,10 @@ pub fn setup_hud(mut commands: Commands) {
             ..default()
         })
         .with_children(|root| {
-            // Existing ore rows
-            spawn_ore_row(root, OreType::Copper);
-            spawn_ore_row(root, OreType::Silver);
-            spawn_ore_row(root, OreType::Gold);
-            // New: Money row
+            for item in ALL_ITEMS {
+                spawn_item_row(root, item);
+            }
+            // Money row
             root.spawn(Node {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
@@ -62,7 +69,7 @@ pub fn setup_hud(mut commands: Commands) {
                     MoneyText,
                 ));
             });
-            // New: Current tool row
+            // Current tool row
             root.spawn(Node {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
@@ -87,7 +94,7 @@ pub fn setup_hud(mut commands: Commands) {
         });
 }
 
-fn spawn_ore_row(root: &mut ChildBuilder, ore: OreType) {
+fn spawn_item_row(root: &mut ChildBuilder, item: ItemKind) {
     root.spawn(Node {
         flex_direction: FlexDirection::Row,
         align_items: AlignItems::Center,
@@ -101,12 +108,12 @@ fn spawn_ore_row(root: &mut ChildBuilder, ore: OreType) {
                 margin: UiRect::right(Val::Px(8.0)),
                 ..default()
             },
-            BackgroundColor(ore_visual_color(ore)),
+            BackgroundColor(item_color(item)),
         ));
         row.spawn((
             Text::new("0"),
             TextFont { font_size: 18.0, ..default() },
-            OreCountText(ore),
+            ItemCountText(item),
         ));
     });
 }
@@ -115,12 +122,12 @@ pub fn update_hud_system(
     inv: Res<Inventory>,
     money: Res<Money>,
     owned: Res<OwnedTools>,
-    mut ore_q: Query<(&mut Text, &OreCountText), (Without<MoneyText>, Without<CurrentToolText>)>,
-    mut money_q: Query<&mut Text, (With<MoneyText>, Without<OreCountText>, Without<CurrentToolText>)>,
-    mut tool_q: Query<&mut Text, (With<CurrentToolText>, Without<OreCountText>, Without<MoneyText>)>,
+    mut item_q: Query<(&mut Text, &ItemCountText), (Without<MoneyText>, Without<CurrentToolText>)>,
+    mut money_q: Query<&mut Text, (With<MoneyText>, Without<ItemCountText>, Without<CurrentToolText>)>,
+    mut tool_q: Query<&mut Text, (With<CurrentToolText>, Without<ItemCountText>, Without<MoneyText>)>,
 ) {
     if inv.is_changed() {
-        for (mut text, marker) in ore_q.iter_mut() {
+        for (mut text, marker) in item_q.iter_mut() {
             **text = inv.get(marker.0).to_string();
         }
     }

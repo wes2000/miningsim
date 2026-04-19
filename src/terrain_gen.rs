@@ -1,20 +1,20 @@
 use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
 
-use crate::grid::{Grid, Layer, OreType, Tile};
+use crate::grid::{Grid, Layer, Tile};
+use crate::items::OreKind;
 
 const SURFACE_ROWS: i32 = 3;
 const DIRT_FRAC: f32 = 0.30;
 const STONE_FRAC: f32 = 0.40;
 const DEEP_FRAC: f32 = 0.27;
 
-fn ore_probs(layer: Layer) -> [(OreType, f32); 3] {
+fn ore_probs(layer: Layer) -> Vec<(OreKind, f32)> {
     match layer {
-        Layer::Dirt  => [(OreType::Copper, 0.04),  (OreType::Silver, 0.005), (OreType::Gold, 0.0)],
-        Layer::Stone => [(OreType::Copper, 0.02),  (OreType::Silver, 0.025), (OreType::Gold, 0.003)],
-        Layer::Deep  => [(OreType::Copper, 0.005), (OreType::Silver, 0.015), (OreType::Gold, 0.02)],
-        Layer::Core => [(OreType::None, 0.0); 3],
-        Layer::Bedrock => [(OreType::None, 0.0); 3],
+        Layer::Dirt  => vec![(OreKind::Copper, 0.04),  (OreKind::Silver, 0.005), (OreKind::Gold, 0.0)],
+        Layer::Stone => vec![(OreKind::Copper, 0.02),  (OreKind::Silver, 0.025), (OreKind::Gold, 0.003)],
+        Layer::Deep  => vec![(OreKind::Copper, 0.005), (OreKind::Silver, 0.015), (OreKind::Gold, 0.02)],
+        Layer::Core | Layer::Bedrock => vec![],
     }
 }
 
@@ -61,15 +61,17 @@ pub fn spawn_tile(g: &Grid) -> (i32, i32) {
 
 fn maybe_assign_ore(tile: &mut Tile, rng: &mut StdRng) {
     let probs = ore_probs(tile.layer);
+    if probs.is_empty() { return; }
     let r: f32 = rng.gen();
     let mut acc = 0.0;
     for (ore, p) in probs {
         acc += p;
         if r < acc {
-            tile.ore = ore;
+            tile.ore = Some(ore);
             return;
         }
     }
+    // tile.ore remains None
 }
 
 fn carve_spawn_pocket(g: &mut Grid) {
@@ -78,12 +80,12 @@ fn carve_spawn_pocket(g: &mut Grid) {
         for dx in -1..=1i32 {
             if let Some(t) = g.get_mut(sp.0 + dx, sp.1 + dy) {
                 t.solid = false;
-                t.ore = OreType::None;
+                t.ore = None;
             }
         }
     }
     if let Some(t) = g.get_mut(sp.0, sp.1 + 2) {
         t.solid = true;
-        t.ore = OreType::None;
+        t.ore = None;
     }
 }
