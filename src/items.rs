@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+// Variant order is load-bearing: derived `Ord` drives BTreeMap iteration in
+// `Inventory.counts` and `SmelterState.output`, both replicated by bevy_replicon.
+// Reordering changes diff output and on-disk save shape — bump SAVE_VERSION if changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum OreKind {
     Copper,
@@ -7,6 +10,7 @@ pub enum OreKind {
     Gold,
 }
 
+// Variant order is load-bearing: see OreKind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ItemKind {
     Ore(OreKind),

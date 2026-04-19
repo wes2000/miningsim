@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::grid::Layer;
 
+// Variant order is load-bearing: derived `Ord` drives BTreeSet iteration in
+// `OwnedTools.0`, replicated by bevy_replicon. Reordering changes diff output
+// and on-disk save shape — bump SAVE_VERSION if changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Tool {
     Shovel,
