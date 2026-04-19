@@ -339,7 +339,7 @@ Each event also carries the originating `ClientId` (added by replicon's framing,
 ```rust
 fn build(&self, app: &mut App) {
     // ... existing setup ...
-    let net_mode = app.world.resource::<NetMode>().clone();
+    let net_mode = app.world().resource::<NetMode>().clone();
     match net_mode {
         NetMode::SinglePlayer => app.add_plugins(SaveLoadPlugin),
         NetMode::Host { .. } | NetMode::Client { .. } => app.add_plugins(MultiplayerPlugin),
@@ -371,7 +371,69 @@ fn main() {
 
 ## Data flow
 
-(See Section 3 of this conversation for the six scenarios — startup variants, movement, dig, smelt/collect/sell, conflict resolution, disconnect. Reproduced verbatim in the implementation plan to avoid drift.)
+Six scenarios.
+
+### Startup (single-player, no args)
+1. `main.rs`: `parse_args(&[])` → `NetMode::SinglePlayer`. Insert as Resource. Add `MiningSimPlugin`.
+2. `MiningSimPlugin::build` sees `NetMode::SinglePlayer` → adds `SaveLoadPlugin`. Does NOT add `MultiplayerPlugin`.
+3. `setup_world` builds the fresh world. Spawns the local Player with `LocalPlayer` marker + `Money`/`Inventory`/`OwnedTools` components.
+4. `startup_load_system` loads `./save.ron` if it exists; `apply()` writes into the LocalPlayer's components.
+5. Game runs as before. F5/F9/AppExit work.
+
+### Startup (host, `cargo run -- host`)
+1. `parse_args(["host"])` → `NetMode::Host { port: 5000 }`.
+2. `MiningSimPlugin::build` adds `MultiplayerPlugin`. Does NOT add `SaveLoadPlugin`.
+3. `setup_world` runs same as before — spawns Smelter, Shop, Camera, and a local Player with `LocalPlayer` marker. Procgen-fresh world.
+4. `MultiplayerPlugin` `start_net_mode_system` (Startup) opens a replicon server on port 5000.
+5. The host's local Player entity also gets a network identity so it shows up as a "connected client" to the server — host-as-player is just another player from the netcode's perspective.
+6. Game runs. Host plays solo until a client connects.
+
+### Startup (client, `cargo run -- join 192.168.1.5:5000`)
+1. `parse_args(["join", "192.168.1.5:5000"])` → `NetMode::Client { addr }`.
+2. `MiningSimPlugin::build` adds `MultiplayerPlugin`. Does NOT add `SaveLoadPlugin`.
+3. `setup_world` runs same as before — spawns Smelter, Shop, Camera, and a local Player. **All of these will get overwritten** when the host's snapshot replicates in (replicon despawns local entities that should be replicated, replaces with the host's authoritative versions).
+4. `start_net_mode_system` opens a replicon client connection to the address.
+5. Once connected, replicon streams the host's full game state (Grid, SmelterState, all Player entities, all components). Local terrain/state gets replaced.
+6. The new Player entity that replicates in matching this client's network ID gets the `LocalPlayer` marker. Other Player entities are `RemotePlayer`.
+7. HUD and Camera now follow the LocalPlayer's components/Transform.
+
+### Player movement (multiplayer)
+1. WASD pressed → local `read_input_system` mutates LocalPlayer's `Velocity` (single-player path is unchanged).
+2. `apply_velocity_system` integrates into LocalPlayer's `Transform` locally (client-side prediction).
+3. Replicon replicates Transform to host.
+4. Host applies/validates (basic bounds check; no anti-cheat in M4) and re-broadcasts to other clients.
+5. Other client(s) see RemotePlayer entities update from replicon snapshots.
+6. Collision (`collide_player_with_grid_system`) runs on **both** client (for prediction) and host (authoritative). Mismatch is rare at our movement speed; host's value wins via replicated Transform.
+
+### Dig (multiplayer)
+1. Local player presses LMB or Space. `dig_input_system` runs as before — but in multiplayer mode it does NOT mutate the Grid directly. Instead, it fires a `DigRequest { target }` event.
+2. `bevy_replicon`'s client-event mechanism transports it to the host.
+3. Host's `handle_dig_requests` system reads incoming `DigRequest`s. For each, it runs the same dig-target-valid + best_applicable_tool + try_dig logic against its authoritative Grid + the requesting player's OwnedTools.
+4. On `Broken` (or `Damaged`), the host mutates Grid + spawns OreDrop (server-side, replicated) + marks chunk dirty.
+5. Replicon replicates the Grid change + new OreDrop entity to all clients.
+6. Clients see the chunk re-mesh on the next frame; OreDrop appears, vacuums into the mining player's Inventory (host adjudicates), Inventory replicates back.
+
+### Conflict resolution: two players dig the same tile
+1. Both clients fire `DigRequest { target: (5, 7) }` within the same tick window.
+2. Host receives both, processes in arrival order. First request: tile breaks, ore goes to player A. Second request: tile is now `AlreadyEmpty`, returns no-op.
+3. Client B sees its own dig "fail silently" — the tile is gone from the next snapshot. Acceptable; player B can pick the next tile.
+
+### Smelt + collect + sell (multiplayer)
+1. LocalPlayer clicks `Smelt All Copper` → fires `SmeltAllRequest { ore: Copper }`.
+2. Host: `handle_smelt_all_requests` checks the requesting player's Inventory has copper; if so, removes it from that player's Inventory and calls `processing::start_smelting(&mut state, Copper, count)` on the shared SmelterState.
+3. Replicon replicates the requesting player's Inventory change + the SmelterState change.
+4. Smelter ticks on the host. Output accumulates; replicates.
+5. Either player clicks `Collect All` → fires `CollectAllRequest`. Host drains output into the requesting player's Inventory.
+6. Same pattern for `BuyToolRequest` (validates against requesting player's Money, applies tool to their OwnedTools) and `SellAllRequest` (sells the requesting player's Inventory; credits their Money).
+
+### Disconnect (host's perspective when client drops)
+1. Replicon emits a disconnect event for the client's network ID.
+2. `handle_client_disconnect` system finds the Player entity tagged with that ID and despawns it.
+3. Host continues solo. Replicated state on the (now-disconnected) client is gone.
+
+### Disconnect (client's perspective when host drops)
+1. Replicon emits a disconnect event indicating loss of the server connection.
+2. Client logs `error!("disconnected from host")` and triggers `AppExit`. Process exits cleanly.
 
 ## Cross-cutting invariants
 
@@ -385,7 +447,51 @@ fn main() {
 
 ## Edge cases & error handling
 
-(See Section 4 of this conversation for connection failures, authority validation, late-join edge cases, replicon mismatches, save/load × multiplayer interaction, movement divergence, and host-as-player edge cases. Reproduced verbatim in the implementation plan to avoid drift.)
+### Connection failures
+- **Client can't reach host** (wrong IP, host not started, firewall blocking). Replicon connection times out. Client logs `error!("connection failed: {err}")`, triggers `AppExit`. No retry.
+- **Host port already in use**. Replicon server bind fails. Host logs error, triggers `AppExit`. Player can retry with `cargo run -- host <other-port>`.
+- **Mid-session connection loss**. Both sides handled per the disconnect data flow above. No reconnect; clean exit.
+- **Slow client / packet loss**. Replicon's reliable channels (Ordered) handle drops via retransmit. Players may see momentary stutters but no desync.
+
+### Authority / validation
+- **Client cheats: sends `BuyToolRequest` while broke.** Host's `try_buy()` returns `NotEnoughMoney`. No state change. Client UI re-syncs from server snapshot.
+- **Client cheats: sends `DigRequest` for an out-of-reach tile.** Host runs `dig_target_valid()` against its own Grid + the requesting player's Transform. Rejected silently.
+- **Client cheats: sends `DigRequest` while having no applicable tool.** Host's `best_applicable_tool()` returns `None`. Rejected silently.
+- **Two players both press `Sell All` simultaneously.** Both events arrive; host processes in order; each player's own Inventory/Money is mutated. No conflict — separate components on separate Player entities.
+- **Player presses `Collect All` when smelter output is empty.** `processing::collect_output()` returns an empty map; host's handler correctly no-ops.
+
+### Late-join
+- **Client connects mid-smelt.** Replicon's initial replication includes current `SmelterState` (recipe, time_left, queue, output). Joining client immediately sees the smelter actively processing.
+- **Client connects while ore drops are in flight.** Replicated as entities; show up on the joining client at their world positions.
+- **Client connects to a partly-dug map.** Grid replicates; chunks despawn-and-respawn on the client to reflect the host's authoritative tile data.
+- **Joining client's local pre-replication setup runs first.** `setup_world` builds a fresh world that immediately gets stomped by the incoming snapshot — there's a brief window (sub-second) where the client sees its own local fresh world before the host's data arrives. Acceptable; could mask with a "Connecting…" overlay in M4.1.
+
+### Replicon / serde mismatches
+- **Host and client built from different commits with incompatible component shapes.** Replicon will fail to deserialize a replicated component → connection drops with parse error. Logged; both sides exit cleanly. M4.1 could add a protocol version handshake to fail-fast at connect time.
+- **`BTreeMap`/`BTreeSet` migration assumes deterministic ordering.** Tests cover this; replicon's diff engine relies on stable serialization to detect "no change."
+
+### Save/load × multiplayer interaction
+- **Player launches with `host` while a `save.ron` exists.** Save file is ignored — `SaveLoadPlugin` isn't loaded in multiplayer mode, so no startup-load runs. `save.ron` is left untouched on disk; a subsequent single-player launch sees it normally.
+- **Player launches single-player after a multiplayer session.** No effect — no save was written from the multiplayer session because `SaveLoadPlugin` wasn't loaded. Single-player behavior is unchanged.
+- **`F5` / `F9` pressed during a multiplayer session.** No-op — `SaveLoadPlugin` isn't mounted, so the hotkey systems don't exist.
+
+### Player movement / collision divergence
+- **Client predicts WASD movement; host validates.** If host's collision resolves the player against a different tile than the client predicted (rare — usually only at the moment a tile is dug by another player), the host's Transform replicates back and snaps the client. Visible as a small jump, acceptable for a 2-player co-op LAN/WAN context.
+- **No anti-cheat on Transform.** Client could send any Transform; host accepts. M4.1 could add velocity-bound checks. For two friends co-oping, fine.
+
+### Host-as-player
+- **Host's local Player entity needs both `LocalPlayer` (for HUD) AND a server identity.** The Player spawned by `setup_world` gets `LocalPlayer`; replicon also recognizes it as a server-side replicated entity. Host's HUD reads its own Player like a single-player setup; clients see the host as another `RemotePlayer`.
+- **Host disconnects from itself.** Doesn't happen — host stays connected to its own server until process exit.
+
+### Out-of-scope edge cases (deferred)
+- **Reconnect after disconnect.** No mid-session recovery. Restart the game.
+- **Lag compensation / rollback.** Not used. Movement prediction is naive.
+- **Bandwidth saturation.** ~30 Hz replication × small components is well within a residential connection. M4.1 can add interest management if bandwidth becomes an issue.
+- **NAT traversal / port forwarding.** Direct IP only. LAN works; WAN requires manual port forwarding. Steam Networking in M4.1 will fix this for friend-list connections.
+- **Schema versioning between net peers.** Both sides assume compatible builds. M4.1 can add a handshake.
+- **Spectators / observers.** Only Player connections.
+- **Server-side anti-cheat heuristics, rate limits.** Two-friend trust model. M4.1+ if we ever ship publicly.
+- **OreDrop vacuum to "the right player".** Currently vacuums to whoever physically walks closest (host adjudicates), regardless of who dug it. Trust-based, matches the smelter sharing model.
 
 ### Explicitly NOT handled in M4
 - Reconnect after disconnect.
@@ -413,7 +519,55 @@ Not unit-tested. The multiplayer flow is validated by manual two-window playtest
 
 ### Manual playtest exit-criteria
 
-(See Section 5 of this conversation for the full checklist — single-player regression, host-launches-alone, two-window co-op, late-join, disconnect, save/load isolation, stability. Reproduced verbatim in the implementation plan.)
+The reviewer needs two game windows:
+- Window A (host): `cargo run -- host`
+- Window B (client): `cargo run -- join 127.0.0.1:5000`
+
+**Single-player regression** (must work first):
+- [ ] `cargo run` → fresh world, F5/F9/AppExit save behavior unchanged from the save/load mini-milestone.
+- [ ] Mining, smelting, shop, all M3 behaviors work identically — the per-player refactor didn't break gameplay.
+
+**Host launches alone:**
+- [ ] `cargo run -- host` → starts cleanly, opens port 5000, console: `info: hosting on port 5000`.
+- [ ] Host can dig, smelt, sell, buy tools — same as single-player.
+- [ ] Host can close the window cleanly.
+
+**Two-window co-op:**
+- [ ] Window A `cargo run -- host`, then Window B `cargo run -- join 127.0.0.1:5000`. Console on both: `info: connected`. Window B's view shows the host's world.
+- [ ] Window B's player visible in Window A as an orange square; Window A's player visible in Window B as orange.
+- [ ] Both players move smoothly; positions update across windows within ~1 frame at LAN latency.
+- [ ] Both players can dig adjacent tiles; no conflicts.
+- [ ] Both players try to dig the SAME tile within ~30ms — exactly one wins, the other's dig silently no-ops.
+- [ ] Player A mines copper → it goes to A's inventory only (verify in B's HUD: B has zero copper).
+- [ ] Player A deposits 5 copper into smelter → A's inventory drops by 5; smelter status visible to both.
+- [ ] Smelter ticks while Player A walks across the map. Player B clicks `Collect All` — bars go to B's inventory (trust-based per spec).
+- [ ] Both players can sell their bars at the shop; coin counts diverge (per-player money).
+- [ ] Player A buys Pickaxe (30c); Player A's owned-tools updates; Player B's tools unchanged.
+- [ ] Player B buys their own Pickaxe later; both now have Pickaxe.
+
+**Late-join:**
+- [ ] Window A hosts, plays for a few minutes (digs tunnels, smelts, buys tools, has 50c).
+- [ ] Window B joins fresh. Window B sees the dug tunnels, the partly-cooking smelter (if active), the populated drops. Window B starts with a fresh Player (default Money/Inventory/OwnedTools — joining doesn't inherit the host's progress).
+
+**Disconnect:**
+- [ ] Close Window A while B is connected. Window B logs `error: disconnected from host` and exits cleanly. No crash.
+- [ ] Restart Window A as host, Window B reconnects (fresh session) — works.
+- [ ] With both connected, close Window B. Window A logs `info: client disconnected`, B's player entity despawns, A continues solo. No crash.
+
+**Save/load isolation:**
+- [ ] In a multiplayer session, F5/F9 do nothing (systems not loaded).
+- [ ] Quit a multiplayer session. No `save.ron` written. (Unless one already existed from single-player; it's untouched.)
+- [ ] Restart in single-player; old save loads as expected.
+
+**Stability:**
+- [ ] 30-minute 2-window session with mixed dig/smelt/sell/buy. No crashes, no obvious desync, no growing bandwidth (host CPU stable).
+
+**Explicitly not tested:**
+- 3+ players (out of scope).
+- WAN connections (LAN/loopback only for M4).
+- Bandwidth measurements / profiling.
+- Replicon protocol-version mismatch (assumed compatible builds).
+- NAT / firewall scenarios.
 
 ## Open questions deferred to implementation planning
 
@@ -421,7 +575,8 @@ Not unit-tested. The multiplayer flow is validated by manual two-window playtest
 - Whether to use `bincode` or a different binary encoding under replicon's transport. Replicon defaults to bincode — accept the default unless there's a reason to swap.
 - Whether `Transform` replication needs interpolation smoothing on remote players. MVP: no — show raw replicated position. Add interpolation in M4.1 if jitter is visible.
 - Whether `OreDrop` entities need their own server-side adjudication (vacuum to nearest player). Currently the vacuum_radius logic runs on the host; replication broadcasts result. That's the trust-based default; verify in playtest.
-- Whether the host's player gets BOTH `LocalPlayer` AND its server-side identity. Yes — `LocalPlayer` is added by the same system that adds it on clients (when "our" Player entity becomes visible), where the host's "own client" is its own server-side ClientId.
+- Whether the host's player gets BOTH `LocalPlayer` AND its server-side identity. Yes — `LocalPlayer` is added by the same system that adds it on clients (when "our" Player entity becomes visible), where the host's "own client" is its own server-side ClientId. **Verify during planning** that `bevy_replicon` exposes a "self ClientId" abstraction on the host; if not, the host needs a separate code path that tags its own Player with `LocalPlayer` at spawn time rather than via the replication-arrival hook.
+- `bevy_replicon` version pin against Bevy 0.15. Channel API (`ChannelKind::Ordered`) and `replicate::<T>()` surface have shifted across replicon releases; the spec's snippets assume a particular shape. **Resolve at plan-writing time** by checking the latest 0.15-compatible release on crates.io and pinning accordingly.
 
 ---
 
