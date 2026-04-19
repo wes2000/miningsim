@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use bevy::prelude::Component;
+use serde::{Deserialize, Serialize};
 use crate::items::OreKind;
 
 pub const SMELT_DURATION_S: f32 = 2.0;
 
-#[derive(Component, Debug, Default)]
+#[derive(Component, Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SmelterState {
     pub recipe: Option<OreKind>,
     pub time_left: f32,

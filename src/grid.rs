@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layer {
     Dirt,
     Stone,
@@ -7,7 +9,7 @@ pub enum Layer {
     Bedrock,  // map boundary, never breakable
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tile {
     pub solid: bool,
     pub layer: Layer,
@@ -21,7 +23,7 @@ impl Default for Tile {
     }
 }
 
-#[derive(Debug, bevy::prelude::Resource)]
+#[derive(Debug, Clone, bevy::prelude::Resource, Serialize, Deserialize)]
 pub struct Grid {
     width: u32,
     height: u32,
@@ -32,6 +34,19 @@ impl Grid {
     pub fn new(width: u32, height: u32) -> Self {
         assert!(width > 0 && height > 0, "Grid dims must be positive");
         let tiles = vec![Tile::default(); (width * height) as usize];
+        Self { width, height, tiles }
+    }
+
+    /// Build a Grid from existing tile data. Panics if `tiles.len() != width * height`.
+    /// Used by save/load and tests; gameplay code should prefer `Grid::new(...)`.
+    pub fn from_raw(width: u32, height: u32, tiles: Vec<Tile>) -> Self {
+        assert!(width > 0 && height > 0, "Grid dims must be positive");
+        let expected = (width as usize) * (height as usize);
+        assert!(
+            tiles.len() == expected,
+            "from_raw: tile count {} doesn't match width*height {}",
+            tiles.len(), expected,
+        );
         Self { width, height, tiles }
     }
 
