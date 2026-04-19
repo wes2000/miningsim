@@ -6,7 +6,7 @@ use crate::inventory::Inventory;
 use crate::processing::SmelterState;
 use crate::tools::OwnedTools;
 
-pub const SAVE_VERSION: u32 = 1;
+pub const SAVE_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SaveData {

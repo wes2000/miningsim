@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use miningsim::economy::Money;
 use miningsim::grid::{Grid, Layer, Tile};
@@ -19,7 +19,7 @@ fn sample_save_data() -> SaveData {
     let mut owned_tools = OwnedTools::default();
     owned_tools.0.insert(Tool::Pickaxe);
 
-    let mut output = HashMap::new();
+    let mut output = BTreeMap::new();
     output.insert(OreKind::Copper, 3);
     let smelter = SmelterState {
         recipe: Some(OreKind::Silver),
@@ -167,7 +167,7 @@ fn owned_tools_round_trip() {
 
 #[test]
 fn smelter_state_round_trip_with_active_recipe_and_output() {
-    let mut output = HashMap::new();
+    let mut output = BTreeMap::new();
     output.insert(OreKind::Copper, 7);
     output.insert(OreKind::Gold, 1);
     let s = SmelterState { recipe: Some(OreKind::Silver), time_left: 0.7, queue: 4, output };
