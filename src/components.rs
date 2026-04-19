@@ -5,6 +5,14 @@ use crate::tools::Tool;
 #[derive(Component)]
 pub struct Player;
 
+/// The player entity controlled by this client. Exactly one in any session.
+#[derive(Component)]
+pub struct LocalPlayer;
+
+/// A player entity replicated from another peer. Renders with a different sprite color.
+#[derive(Component)]
+pub struct RemotePlayer;
+
 #[derive(Component, Default)]
 pub struct Velocity(pub Vec2);
 

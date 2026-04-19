@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use crate::components::{
-    InventoryPopupOpen, InventoryPopupRoot, MoneyText, ToolRowText,
+    InventoryPopupOpen, InventoryPopupRoot, LocalPlayer, MoneyText, ToolRowText,
 };
 use crate::economy::Money;
 use crate::inventory::Inventory;
@@ -193,11 +193,11 @@ fn spawn_tool_row(parent: &mut ChildBuilder, tool: Tool) {
 
 /// Refreshes the top-right coin counter when Money changes.
 pub fn update_money_text_system(
-    money: Res<Money>,
-    mut q: Query<&mut Text, With<MoneyText>>,
+    money_q: Query<&Money, (With<LocalPlayer>, Changed<Money>)>,
+    mut text_q: Query<&mut Text, With<MoneyText>>,
 ) {
-    if !money.is_changed() { return; }
-    if let Ok(mut text) = q.get_single_mut() {
+    let Ok(money) = money_q.get_single() else { return };
+    if let Ok(mut text) = text_q.get_single_mut() {
         **text = format!("{}c", money.0);
     }
 }

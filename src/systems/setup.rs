@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::components::{Facing, InventoryPopupOpen, MainCamera, Player, Shop, ShopUiOpen, Smelter, SmelterUiOpen, Velocity};
+use crate::components::{Facing, InventoryPopupOpen, LocalPlayer, MainCamera, Player, Shop, ShopUiOpen, Smelter, SmelterUiOpen, Velocity};
 use crate::coords::tile_center_world;
 use crate::economy::Money;
 use crate::inventory::Inventory;
@@ -20,7 +20,6 @@ pub fn setup_world(mut commands: Commands) {
     commands.insert_resource(grid);
     commands.insert_resource(Inventory::default());
     commands.insert_resource(crate::systems::player::DigCooldown::default());
-    commands.insert_resource(Money::default());
     commands.insert_resource(OwnedTools::default());
     commands.insert_resource(ShopUiOpen::default());
     commands.insert_resource(SmelterUiOpen::default());
@@ -29,8 +28,10 @@ pub fn setup_world(mut commands: Commands) {
     // Player
     commands.spawn((
         Player,
+        LocalPlayer,
         Velocity::default(),
         Facing::default(),
+        Money::default(),
         Sprite {
             color: Color::srgb(0.30, 0.60, 0.90),
             custom_size: Some(Vec2::splat(12.0)),
