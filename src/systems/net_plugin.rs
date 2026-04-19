@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use bevy_replicon_renet::RepliconRenetPlugins;
 
-use crate::components::{ChunkDirty, NetOwner, OreDrop, OwningClient, Player, TerrainChunk};
+use crate::components::{ChunkDirty, NetOwner, OreDrop, OwningClient, Player, Shop, Smelter, TerrainChunk};
 use crate::coords::{tile_center_world, world_to_tile};
 use crate::dig::{self, DigStatus};
 use crate::economy::{self, Money};
@@ -34,6 +34,8 @@ impl Plugin for MultiplayerPlugin {
         // delta encoding if the map grows.
         app.replicate::<Player>()
             .replicate::<NetOwner>()
+            .replicate::<Shop>()
+            .replicate::<Smelter>()
             .replicate::<SmelterState>()
             .replicate::<Money>()
             .replicate::<Grid>()

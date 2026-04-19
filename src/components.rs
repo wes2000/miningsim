@@ -79,7 +79,7 @@ pub struct OreDrop {
 #[derive(Component)]
 pub struct MainCamera;
 
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
 pub struct Shop;
 
 #[derive(Component)]
@@ -109,7 +109,7 @@ pub struct InventoryPopupOpen(pub bool);
 #[derive(bevy::prelude::Resource, Default)]
 pub struct ShopUiOpen(pub bool);
 
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
 pub struct Smelter;
 
 #[derive(Component)]
