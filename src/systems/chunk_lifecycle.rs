@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use crate::components::{ChunkDirty, MainCamera, TerrainChunk};
+use crate::coords;
 use crate::grid::Grid;
-use crate::systems::setup::TILE_SIZE_PX;
 
 pub const CHUNK_TILES: i32 = 16;
 pub const CHUNK_MARGIN: i32 = 1;
@@ -66,8 +66,7 @@ pub fn chunk_lifecycle_system(
 }
 
 fn world_to_chunk(world: Vec2) -> IVec2 {
-    let tx = (world.x / TILE_SIZE_PX).floor() as i32;
     // game Y inverts; underground tiles have larger y, in world they have negative y
-    let ty = (-world.y / TILE_SIZE_PX).floor() as i32;
-    IVec2::new(tx.div_euclid(CHUNK_TILES), ty.div_euclid(CHUNK_TILES))
+    let t = coords::world_to_tile(world);
+    IVec2::new(t.x.div_euclid(CHUNK_TILES), t.y.div_euclid(CHUNK_TILES))
 }

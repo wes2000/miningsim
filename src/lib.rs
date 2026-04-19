@@ -1,5 +1,6 @@
 pub mod app;
 pub mod components;
+pub mod coords;
 pub mod dig;
 pub mod economy;
 pub mod grid;

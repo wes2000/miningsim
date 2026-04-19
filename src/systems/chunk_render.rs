@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use crate::components::{ChunkDirty, TerrainChunk};
+use crate::coords::{self, TILE_SIZE_PX};
 use crate::grid::{Grid, Layer, OreType};
-use crate::systems::setup::TILE_SIZE_PX;
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
 use crate::systems::hud::ore_visual_color;
 
@@ -38,8 +38,9 @@ pub fn chunk_remesh_system(
                     let Some(t) = grid.get(gx, gy) else { continue };
                     if !t.solid { continue }
 
-                    let world_x = gx as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0;
-                    let world_y = -(gy as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0);
+                    let center = coords::tile_center_world(IVec2::new(gx, gy));
+                    let world_x = center.x;
+                    let world_y = center.y;
 
                     parent.spawn((
                         Sprite {

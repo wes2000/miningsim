@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use crate::components::{ChunkDirty, Facing, OreDrop, Player, TerrainChunk, Velocity};
+use crate::coords::{self, TILE_SIZE_PX};
 use crate::dig::{self, DigStatus};
 use crate::grid::{Grid, OreType};
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
 use crate::systems::hud::ore_visual_color;
-use crate::systems::setup::TILE_SIZE_PX;
 
 #[derive(Resource)]
 pub struct DigCooldown(pub Timer);
@@ -79,23 +79,19 @@ pub fn collide_player_with_grid_system(
         let max = Vec2::new(p.x + PLAYER_HALF, p.y + PLAYER_HALF);
 
         // tile range overlapping the AABB
-        let tx0 = (min.x / TILE_SIZE_PX).floor() as i32;
-        let tx1 = (max.x / TILE_SIZE_PX).floor() as i32;
-        let ty0 = ((-max.y) / TILE_SIZE_PX).floor() as i32;
-        let ty1 = ((-min.y) / TILE_SIZE_PX).floor() as i32;
+        let t_min = coords::world_to_tile(Vec2::new(min.x, max.y));
+        let t_max = coords::world_to_tile(Vec2::new(max.x, min.y));
+        let tx0 = t_min.x;
+        let tx1 = t_max.x;
+        let ty0 = t_min.y;
+        let ty1 = t_max.y;
 
         for ty in ty0..=ty1 {
             for tx in tx0..=tx1 {
                 let Some(tile) = grid.get(tx, ty) else { continue };
                 if !tile.solid { continue }
-                let tw_min = Vec2::new(
-                    tx as f32 * TILE_SIZE_PX,
-                    -((ty + 1) as f32) * TILE_SIZE_PX,
-                );
-                let tw_max = Vec2::new(
-                    (tx + 1) as f32 * TILE_SIZE_PX,
-                    -(ty as f32) * TILE_SIZE_PX,
-                );
+                let tw_min = coords::tile_min_world(IVec2::new(tx, ty));
+                let tw_max = tw_min + Vec2::splat(TILE_SIZE_PX);
                 let overlap_x = (max.x.min(tw_max.x)) - (min.x.max(tw_min.x));
                 let overlap_y = (max.y.min(tw_max.y)) - (min.y.max(tw_min.y));
                 if overlap_x <= 0.0 || overlap_y <= 0.0 { continue }
@@ -146,10 +142,7 @@ pub fn dig_input_system(
     if !cooldown.0.finished() { return; }
 
     let Ok((player_xf, facing)) = player_q.get_single() else { return };
-    let player_tile = IVec2::new(
-        (player_xf.translation.x / TILE_SIZE_PX).floor() as i32,
-        ((-player_xf.translation.y) / TILE_SIZE_PX).floor() as i32,
-    );
+    let player_tile = coords::world_to_tile(player_xf.translation.truncate());
 
     // Target tile depends on which trigger fired. Mouse takes precedence.
     let target_tile = if mouse_held {
@@ -157,19 +150,14 @@ pub fn dig_input_system(
         let Some(cursor_screen) = win.cursor_position() else { return };
         let Ok((cam, cam_xf)) = cam_q.get_single() else { return };
         let Ok(cursor_world) = cam.viewport_to_world_2d(cam_xf, cursor_screen) else { return };
-        let tx = (cursor_world.x / TILE_SIZE_PX).floor() as i32;
-        let ty = ((-cursor_world.y) / TILE_SIZE_PX).floor() as i32;
-        IVec2::new(tx, ty)
+        coords::world_to_tile(cursor_world)
     } else {
         // Spacebar: dig the tile immediately in front of the player, in the
         // current facing direction (set by the last WASD press).
         player_tile + facing.0
     };
 
-    let tile_center = Vec2::new(
-        target_tile.x as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0,
-        -(target_tile.y as f32 * TILE_SIZE_PX + TILE_SIZE_PX / 2.0),
-    );
+    let tile_center = coords::tile_center_world(target_tile);
 
     let reach = DIG_REACH_TILES as i32;
 

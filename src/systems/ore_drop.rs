@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use crate::components::{OreDrop, Player};
 use crate::inventory::Inventory;
-use crate::systems::setup::TILE_SIZE_PX;
+use crate::coords::TILE_SIZE_PX;
 
 pub const VACUUM_RADIUS_TILES: f32 = 1.0;
 pub const VACUUM_SPEED_PX_PER_S: f32 = 200.0;
