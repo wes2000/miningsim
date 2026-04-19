@@ -131,7 +131,7 @@ pub fn dig_input_system(
     mut grid: ResMut<Grid>,
     mut cooldown: ResMut<DigCooldown>,
     chunks_q: Query<(Entity, &TerrainChunk)>,
-    owned_tools: Res<crate::tools::OwnedTools>,
+    owned_tools: Single<&crate::tools::OwnedTools, With<crate::components::LocalPlayer>>,
     time: Res<Time>,
 ) {
     cooldown.0.tick(time.delta());
@@ -167,7 +167,7 @@ pub fn dig_input_system(
 
     // Look up tile layer to pick the best tool.
     let Some(tile) = grid.get(target_tile.x, target_tile.y).copied() else { return; };
-    let Some(tool) = crate::tools::best_applicable_tool(&owned_tools, tile.layer) else {
+    let Some(tool) = crate::tools::best_applicable_tool(*owned_tools, tile.layer) else {
         // Player owns nothing that can break this layer. Clunk; no cooldown reset.
         return;
     };

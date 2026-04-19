@@ -19,8 +19,7 @@ pub const SAVE_PATH: &str = "save.ron";
 /// since `setup_world` precedes us in the chained Startup tuple.
 pub fn startup_load_system(
     grid: ResMut<Grid>,
-    local_player: Single<(&mut Money, &mut Inventory), With<LocalPlayer>>,
-    owned: ResMut<OwnedTools>,
+    local_player: Single<(&mut Money, &mut Inventory, &mut OwnedTools), With<LocalPlayer>>,
     smelter_q: Query<&mut SmelterState, With<Smelter>>,
     player_q: Query<&mut Transform, With<Player>>,
 ) {
@@ -28,8 +27,8 @@ pub fn startup_load_system(
         info!("no save file found, starting fresh");
         return;
     }
-    let (mut money, mut inventory) = local_player.into_inner();
-    if let Err(e) = try_load_and_apply(grid, &mut inventory, &mut money, owned, smelter_q, player_q) {
+    let (mut money, mut inventory, mut owned) = local_player.into_inner();
+    if let Err(e) = try_load_and_apply(grid, &mut inventory, &mut money, &mut owned, smelter_q, player_q) {
         error!("save load failed: {:?}", e);
     } else {
         info!("save loaded");
@@ -39,27 +38,25 @@ pub fn startup_load_system(
 pub fn save_hotkey_system(
     keys: Res<ButtonInput<KeyCode>>,
     grid: Res<Grid>,
-    local_player: Single<(&Money, &Inventory), With<LocalPlayer>>,
-    owned: Res<OwnedTools>,
+    local_player: Single<(&Money, &Inventory, &OwnedTools), With<LocalPlayer>>,
     smelter_q: Query<&SmelterState, With<Smelter>>,
     player_q: Query<&Transform, With<Player>>,
 ) {
     if !keys.just_pressed(KeyCode::F5) { return; }
-    let (money, inventory) = local_player.into_inner();
-    save_now(&grid, inventory, money, &owned, &smelter_q, &player_q);
+    let (money, inventory, owned) = local_player.into_inner();
+    save_now(&grid, inventory, money, owned, &smelter_q, &player_q);
 }
 
 pub fn load_hotkey_system(
     keys: Res<ButtonInput<KeyCode>>,
     grid: ResMut<Grid>,
-    local_player: Single<(&mut Money, &mut Inventory), With<LocalPlayer>>,
-    owned: ResMut<OwnedTools>,
+    local_player: Single<(&mut Money, &mut Inventory, &mut OwnedTools), With<LocalPlayer>>,
     smelter_q: Query<&mut SmelterState, With<Smelter>>,
     player_q: Query<&mut Transform, With<Player>>,
 ) {
     if !keys.just_pressed(KeyCode::F9) { return; }
-    let (mut money, mut inventory) = local_player.into_inner();
-    if let Err(e) = try_load_and_apply(grid, &mut inventory, &mut money, owned, smelter_q, player_q) {
+    let (mut money, mut inventory, mut owned) = local_player.into_inner();
+    if let Err(e) = try_load_and_apply(grid, &mut inventory, &mut money, &mut owned, smelter_q, player_q) {
         error!("save load failed: {:?}", e);
     } else {
         info!("save loaded");
@@ -69,15 +66,14 @@ pub fn load_hotkey_system(
 pub fn auto_save_on_exit_system(
     mut exit_events: EventReader<AppExit>,
     grid: Res<Grid>,
-    local_player: Single<(&Money, &Inventory), With<LocalPlayer>>,
-    owned: Res<OwnedTools>,
+    local_player: Single<(&Money, &Inventory, &OwnedTools), With<LocalPlayer>>,
     smelter_q: Query<&SmelterState, With<Smelter>>,
     player_q: Query<&Transform, With<Player>>,
 ) {
     if exit_events.read().next().is_none() { return; }
     info!("auto-saving on exit");
-    let (money, inventory) = local_player.into_inner();
-    save_now(&grid, inventory, money, &owned, &smelter_q, &player_q);
+    let (money, inventory, owned) = local_player.into_inner();
+    save_now(&grid, inventory, money, owned, &smelter_q, &player_q);
 }
 
 // --- helpers (private) -------------------------------------------------------
@@ -118,7 +114,7 @@ fn try_load_and_apply(
     mut grid: ResMut<Grid>,
     inventory: &mut Inventory,
     money: &mut Money,
-    mut owned: ResMut<OwnedTools>,
+    owned: &mut OwnedTools,
     mut smelter_q: Query<&mut SmelterState, With<Smelter>>,
     mut player_q: Query<&mut Transform, With<Player>>,
 ) -> Result<(), LoadError> {
@@ -130,7 +126,7 @@ fn try_load_and_apply(
         // Apply the rest using a throwaway state
         let mut throwaway = SmelterState::default();
         let mut pos = [0.0_f32, 0.0_f32];
-        save::apply(data, &mut grid, inventory, money, &mut owned, &mut throwaway, &mut pos);
+        save::apply(data, &mut grid, inventory, money, owned, &mut throwaway, &mut pos);
         if let Ok(mut player_xf) = player_q.get_single_mut() {
             player_xf.translation.x = pos[0];
             player_xf.translation.y = pos[1];
@@ -140,12 +136,12 @@ fn try_load_and_apply(
     let Ok(mut player_xf) = player_q.get_single_mut() else {
         warn!("apply: player entity missing; skipping player position restore");
         let mut pos = [0.0_f32, 0.0_f32];
-        save::apply(data, &mut grid, inventory, money, &mut owned, &mut smelter, &mut pos);
+        save::apply(data, &mut grid, inventory, money, owned, &mut smelter, &mut pos);
         return Ok(());
     };
 
     let mut pos = [player_xf.translation.x, player_xf.translation.y];
-    save::apply(data, &mut grid, inventory, money, &mut owned, &mut smelter, &mut pos);
+    save::apply(data, &mut grid, inventory, money, owned, &mut smelter, &mut pos);
     player_xf.translation.x = pos[0];
     player_xf.translation.y = pos[1];
     Ok(())
