@@ -7,6 +7,7 @@ pub mod grid;
 pub mod inventory;
 pub mod items;
 pub mod processing;
+pub mod save;
 pub mod systems;
 pub mod terrain_gen;
 pub mod tools;
