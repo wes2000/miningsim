@@ -69,3 +69,21 @@ pub struct InventoryPopupOpen(pub bool);
 
 #[derive(bevy::prelude::Resource, Default)]
 pub struct ShopUiOpen(pub bool);
+
+#[derive(Component)]
+pub struct Smelter;
+
+#[derive(Component)]
+pub struct SmelterUiRoot;
+
+#[derive(Component)]
+pub enum SmelterButtonKind {
+    SmeltAll(OreKind),
+    CollectAll,
+}
+
+#[derive(Component)]
+pub struct SmelterStatusText;
+
+#[derive(bevy::prelude::Resource, Default)]
+pub struct SmelterUiOpen(pub bool);

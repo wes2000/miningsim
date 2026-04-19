@@ -1,8 +1,9 @@
 use bevy::prelude::*;
-use crate::components::{Facing, InventoryPopupOpen, MainCamera, Player, Shop, ShopUiOpen, Velocity};
+use crate::components::{Facing, InventoryPopupOpen, MainCamera, Player, Shop, ShopUiOpen, Smelter, SmelterUiOpen, Velocity};
 use crate::coords::tile_center_world;
 use crate::economy::Money;
 use crate::inventory::Inventory;
+use crate::processing::SmelterState;
 use crate::terrain_gen;
 use crate::tools::OwnedTools;
 
@@ -22,6 +23,7 @@ pub fn setup_world(mut commands: Commands) {
     commands.insert_resource(Money::default());
     commands.insert_resource(OwnedTools::default());
     commands.insert_resource(ShopUiOpen::default());
+    commands.insert_resource(SmelterUiOpen::default());
     commands.insert_resource(InventoryPopupOpen::default());
 
     // Player
@@ -48,6 +50,20 @@ pub fn setup_world(mut commands: Commands) {
             ..default()
         },
         Transform::from_translation(shop_world.extend(5.0)),
+    ));
+
+    // Smelter
+    let smelter_tile = IVec2::new(sp.0 - 3, sp.1);   // 3 tiles left of player spawn
+    let smelter_world = tile_center_world(smelter_tile);
+    commands.spawn((
+        Smelter,
+        SmelterState::default(),
+        Sprite {
+            color: Color::srgb(0.95, 0.50, 0.20),   // orange placeholder
+            custom_size: Some(Vec2::splat(14.0)),
+            ..default()
+        },
+        Transform::from_translation(smelter_world.extend(5.0)),
     ));
 
     // Camera
