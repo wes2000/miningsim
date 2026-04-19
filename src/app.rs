@@ -82,9 +82,7 @@ impl Plugin for MiningSimPlugin {
                 app.add_plugins(crate::systems::save_load::SaveLoadPlugin);
             }
             crate::net::NetMode::Host { .. } | crate::net::NetMode::Client { .. } => {
-                // MultiplayerPlugin lands in Task 7. For now, leave both branches no-op
-                // for non-SinglePlayer modes — the game will run without networking
-                // (and without save/load), which is the intentional intermediate state.
+                app.add_plugins(crate::systems::net_plugin::MultiplayerPlugin);
             }
         }
     }
