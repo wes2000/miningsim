@@ -465,12 +465,41 @@ net_events serde round-trip).
 - `Cargo.lock` is still gitignored. Convention for binary crates is to
   commit it; deferred per user call. Adds risk that multi-machine
   builds resolve different patch versions of replicon/renet.
-- New joiners spawn at world `(0, 0)` rather than the host's spawn-tile
-  helper. Visually fine but possibly inside terrain — they may need to
-  dig out before being visible. Trivial to fix when the UX matters.
 - The `Display` impl on `CliParseError` was never added — `main.rs`
   uses `{:?}` for the fallback error message. Output is readable
   (`UnknownCommand("garbage")`) but not user-facing-polished.
+
+**Post-merge fixes (caught by the final code-reviewer + smoke):**
+- Per-frame gameplay systems (input, collision, dig, camera, shop /
+  smelter proximity, ore vacuum) were querying `With<Player>` and
+  using `Single<…>` / `iter()`. Once a remote client connected,
+  host-side `Single<…>` skipped silently or panicked, and host's WASD
+  dragged the remote player around. Swept to `With<LocalPlayer>` in
+  commit `d82e4c4`. `apply_velocity_system`, server-side handlers, and
+  the player-tagging systems intentionally still use `With<Player>`.
+- `start_net_mode_system` was logging transport-setup failures and
+  silently continuing. Now emits `AppExit::Error` so the user sees the
+  failure (`d82e4c4`).
+- `setup_world` unconditionally spawned Grid + Player + Shop + Smelter
+  on every launch. After replicon channels were wired correctly,
+  client-mode launches got duplicate Grid entities and `Single<&mut
+  Grid>` panicked. Now gated on `NetMode != Client`; clients receive
+  these via replication. `Shop` and `Smelter` markers gained
+  Serialize/Deserialize + replicate registration so clients see them
+  (`a21f3f6`).
+- Bevy's `Sprite` doesn't replicate. Three small client-side systems
+  (`add_shop_visuals_on_arrival`, `add_smelter_visuals_on_arrival`,
+  `add_ore_drop_visuals_on_arrival`) attach the local sprite when a
+  replicated entity arrives. `OreDrop` also gained Serialize/Deserialize
+  derives + a replicate registration (`862257b`).
+- Bevy 0.15.4 `Single<T>` actually panics (not skips) on missing
+  entities; earlier task notes were wrong. Client-side systems that
+  depended on Grid or LocalPlayer-tagged components panicked at the
+  first Update tick before replication arrived. Wrapped affected
+  parameters in `Option<Single<…>>` with early-return (`9c63014`).
+- Joining clients now spawn at the host's spawn-pocket (via
+  `terrain_gen::spawn_tile` + `coords::tile_center_world`) instead of
+  world `(0, 0)` (`958bcc9`).
 
 **Decisions for the next milestone:**
 - **The bones are online-friendly.** `bevy_replicon` + `renet` are real
