@@ -130,14 +130,15 @@ pub fn dig_input_system(
     win_q: Query<&Window, With<PrimaryWindow>>,
     cam_q: Query<(&Camera, &GlobalTransform), With<crate::components::MainCamera>>,
     player_q: Query<(&Transform, &Facing), With<LocalPlayer>>,
-    grid: Single<&mut Grid>,
+    grid: Option<Single<&mut Grid>>,
     mut cooldown: ResMut<DigCooldown>,
     chunks_q: Query<(Entity, &TerrainChunk)>,
-    owned_tools: Single<&crate::tools::OwnedTools, With<crate::components::LocalPlayer>>,
+    owned_tools: Option<Single<&crate::tools::OwnedTools, With<crate::components::LocalPlayer>>>,
     time: Res<Time>,
     net_mode: Res<crate::net::NetMode>,
     mut dig_writer: EventWriter<DigRequest>,
 ) {
+    let (Some(grid), Some(owned_tools)) = (grid, owned_tools) else { return };
     cooldown.0.tick(time.delta());
     let mut grid = grid.into_inner();
 

@@ -205,10 +205,11 @@ pub fn update_money_text_system(
 /// Refreshes the popup's item counts when Inventory changes and the tools
 /// section when OwnedTools changes. Runs cheaply if neither did.
 pub fn update_inventory_popup_system(
-    local_player: Single<(Ref<Inventory>, Ref<OwnedTools>), With<LocalPlayer>>,
+    local_player: Option<Single<(Ref<Inventory>, Ref<OwnedTools>), With<LocalPlayer>>>,
     mut item_q: Query<(&mut Text, &ItemCountText), Without<ToolRowText>>,
     mut tool_q: Query<(&mut Text, &ToolRowText), Without<ItemCountText>>,
 ) {
+    let Some(local_player) = local_player else { return };
     let (inv, owned) = local_player.into_inner();
     if inv.is_changed() {
         for (mut text, marker) in item_q.iter_mut() {

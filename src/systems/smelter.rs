@@ -134,13 +134,14 @@ pub fn sync_smelter_visibility_system(
 }
 
 pub fn update_smelter_panel_system(
-    local_inv: Single<&Inventory, With<LocalPlayer>>,
+    local_inv: Option<Single<&Inventory, With<LocalPlayer>>>,
     state_q: Query<&SmelterState>,
     status_q: Query<Entity, With<SmelterStatusText>>,
     buttons_q: Query<(&SmelterButtonKind, &Children, Entity)>,
     mut bg_q: Query<&mut BackgroundColor>,
     mut texts_q: Query<&mut Text>,
 ) {
+    let Some(local_inv) = local_inv else { return };
     let Ok(state) = state_q.get_single() else { return };
     let inv = local_inv.into_inner();
     // Always refresh — SmelterState may have changed (tick mutates time_left every frame)

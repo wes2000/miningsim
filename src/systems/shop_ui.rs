@@ -80,11 +80,12 @@ pub fn sync_shop_visibility_system(
 }
 
 pub fn update_shop_labels_system(
-    local_player: Single<(Ref<Money>, Ref<OwnedTools>), With<LocalPlayer>>,
+    local_player: Option<Single<(Ref<Money>, Ref<OwnedTools>), With<LocalPlayer>>>,
     buttons_q: Query<(&ShopButtonKind, &Children, Entity)>,
     mut bg_q: Query<&mut BackgroundColor>,
     mut texts_q: Query<&mut Text>,
 ) {
+    let Some(local_player) = local_player else { return };
     let (money, owned) = local_player.into_inner();
     if !money.is_changed() && !owned.is_changed() { return; }
     for (kind, children, entity) in buttons_q.iter() {

@@ -12,8 +12,9 @@ pub fn ore_drop_system(
     time: Res<Time>,
     player_q: Query<&Transform, With<LocalPlayer>>,
     mut drops_q: Query<(Entity, &OreDrop, &mut Transform), Without<LocalPlayer>>,
-    local_inv: Single<&mut Inventory, With<LocalPlayer>>,
+    local_inv: Option<Single<&mut Inventory, With<LocalPlayer>>>,
 ) {
+    let Some(local_inv) = local_inv else { return };
     let Ok(player_xf) = player_q.get_single() else { return };
     let player_pos = player_xf.translation.truncate();
     let mut inv = local_inv.into_inner();
