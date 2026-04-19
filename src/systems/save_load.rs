@@ -146,3 +146,16 @@ fn try_load_and_apply(
     player_xf.translation.y = pos[1];
     Ok(())
 }
+
+pub struct SaveLoadPlugin;
+
+impl Plugin for SaveLoadPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, startup_load_system.after(crate::systems::setup::setup_world))
+            .add_systems(Update, (
+                save_hotkey_system.in_set(crate::app::UiSet::SaveLoad),
+                load_hotkey_system.in_set(crate::app::UiSet::SaveLoad),
+                auto_save_on_exit_system.in_set(crate::app::UiSet::SaveLoad),
+            ));
+    }
+}
