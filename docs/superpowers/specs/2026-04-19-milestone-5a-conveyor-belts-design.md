@@ -114,7 +114,7 @@ All five systems run with `.run_if(server_running)` in multiplayer; in single-pl
   - If adjacent belt's `dir` points TOWARD the smelter (i.e., `next_tile(belt_pos, belt.dir) == smelter_pos`), and belt has an `item`, AND `SmelterState.queue < QUEUE_MAX`: pull the item into queue, clear belt slot. Pull at most one item per smelter per tick (cardinal order: N, E, S, W).
   - If adjacent belt's `dir` points AWAY from the smelter (i.e., `next_tile(smelter_pos_treated_as_belt_origin, belt.dir) == ...`), formally: the belt's direction agrees with `(belt_pos - smelter_pos).into()` (the adjacent belt sits in direction X from the smelter and points further in direction X). And belt's `item.is_none()` AND `SmelterState.output` has any bars: push one bar to that belt slot. Push at most one bar per smelter per tick (cardinal order: N, E, S, W).
 
-**`belt_pickup_system`:** for each `OreDrop` entity within an empty belt tile (matching grid position), transfer `OreDrop.item` into `BeltTile.item` and despawn the `OreDrop`. Belt tile must be empty.
+**`belt_pickup_system`:** for each `OreDrop` entity, compute `world_to_tile(ore_drop.translation)`. If a belt entity exists at that exact tile coordinate AND its `item.is_none()`, transfer `OreDrop.item` into `BeltTile.item` and despawn the `OreDrop`. Strict equality on grid coordinates — no proximity radius. An ore picked up this tick advances on the same tick (pickup runs before tick — see run-order below).
 
 **`belt_spillage_system`:** for each belt tile whose `next_tile(pos, dir)` is NOT a belt and NOT a smelter, AND whose item is not consumed by other I/O this tick: spawn an `OreDrop` at `tile_center_world(next_tile(pos, dir))` and clear the belt slot.
 
@@ -149,14 +149,15 @@ Build mode is **per-player local state** — Resource not replicated. Each peer 
 | `src/save.rs` | `SaveData.belts: Vec<(IVec2, BeltTile)>`; SAVE_VERSION 2 → 3 |
 | `src/systems/save_load.rs` | `save::collect` queries belts; `save::apply` despawns + respawns belts |
 | `src/systems/net_events.rs` | Add `PlaceBeltRequest { tile, dir }` and `RemoveBeltRequest { tile }` events |
-| `src/systems/net_plugin.rs` | Register `replicate::<BeltTile>()`, `replicate::<BeltVisual>()`, `add_client_event` for both new events; add `handle_place_belt_requests` and `handle_remove_belt_requests` server-side handlers; add `add_belt_visuals_on_arrival` for client-side Sprite attachment |
+| `src/systems/net_plugin.rs` | Register `replicate::<BeltTile>()` (NOT `BeltVisual` — see Multiplayer section), `add_client_event` for both new events; add `handle_place_belt_requests` and `handle_remove_belt_requests` server-side handlers; add `add_belt_visuals_on_arrival` for client-side Sprite attachment + initial BeltVisual computation |
 | `src/systems/belt.rs` | (new) belt-tick + I/O systems |
 | `src/systems/belt_ui.rs` | (new) build-mode input + ghost rendering |
-| `src/app.rs` | Register all new systems into appropriate sets. Add `MachineSet::BeltTick` between `MachineSet::SmelterTick` and (existing) `MachineSet::SmelterUi`; insert `BeltSpillage` set after `MachineSet::SmelterUi`. Belt-UI input + ghost render go in `UiSet::Hud` or a new `UiSet::Build`. |
+| `src/app.rs` | Register all new systems into appropriate sets. Insert `MachineSet::BeltPickup` and `MachineSet::BeltTick` BEFORE `MachineSet::SmelterTick` (so the run order is: BeltPickup → BeltTick → SmelterTick (which now also runs `smelter_belt_io_system`) → SmelterUi → BeltSpillage). `MachineSet::BeltSpillage` goes after `MachineSet::SmelterUi`. Belt-UI input + ghost render go in `UiSet::Hud` or a new `UiSet::Build`. |
 
 ### Multiplayer
 
-- `BeltTile` and `BeltVisual` derive `Component, Serialize, Deserialize, Clone, Copy` and are registered with replicon's `replicate::<T>()` in `MultiplayerPlugin::build`.
+- `BeltTile` derives `Component, Serialize, Deserialize, Clone, Copy` and is registered with replicon's `replicate::<BeltTile>()` in `MultiplayerPlugin::build`.
+- `BeltVisual` is **derived locally on each peer** from `BeltTile.dir` + neighboring belts' directions. It is NOT replicated. A small `recompute_belt_visuals_on_change_system` runs on every peer (host + clients) when a belt is added, removed, or its `BeltTile.dir` changes — it inspects the 4 cardinal neighbors and updates `BeltVisual` for the changed belt and any neighbors whose corner-shape might have flipped. This avoids shipping a derived value over the wire and avoids a "stale visual after replication" race.
 - New entities (belts) spawn server-side with the `Replicated` marker.
 - The Bevy `Sprite` component is NOT replicated (per M4 fix). Add `add_belt_visuals_on_arrival(commands, q: Query<(Entity, &BeltTile, &BeltVisual), Added<BeltTile>>)` system in `net_player.rs` that attaches the belt sprite locally on the client.
 - Two new client-fired events:
@@ -186,23 +187,19 @@ Build mode is **per-player local state** — Resource not replicated. Each peer 
 
 ### Single-player: ore from dig site to bars at shop
 
-1. Player digs copper ore at tile (12, 5). `OreDrop` sprite spawns at `tile_center_world((12, 5))`.
-2. Player walks adjacent and tosses (existing vacuum picks it up — wait, this is the existing flow; for the belt path, the player drops it on a belt tile by walking onto a belt tile while carrying ore... actually NO, per the design we picked option (a) "belts pick up ore drops from the world": the player digs *adjacent to* a belt tile, the OreDrop lands on the belt, `belt_pickup_system` consumes it).
-3. So: player has placed a belt at (13, 5) facing East. They dig at (12, 5), the resulting `OreDrop` lands at world position `tile_center_world((12, 5))` — NOT on the belt. The player can either: (a) vacuum it up and drop it on the belt by some action (we haven't designed an explicit "drop on belt" action — the player would need to dig directly on a tile that's on a belt path), or (b) we revise: the player's dig can land the drop on an adjacent belt tile if one is right next to the dig site.
-4. **Pragmatic resolution:** for MVP the player physically vacuums the ore (existing mechanic), then walks to the start of their belt. The first belt tile in their path picks up the ore from the player's inventory? No — that re-introduces a player→belt explicit action.
-5. **Cleanest resolution:** the player drops ore by digging *directly above* (or adjacent to) a belt tile. The OreDrop then naturally falls within the belt tile's grid coord, and `belt_pickup_system` (which checks "OreDrop floor sprite within an empty belt tile") consumes it. **This is the path the player learns through play:** "if I want my ore on a belt, I dig right next to where the belt starts."
+**Pickup rule:** `belt_pickup_system` consumes any `OreDrop` whose `world_to_tile(ore_drop.translation) == belt_pos` (strict equality on grid-tile coordinates), provided the belt's `item.is_none()`. The ore must land on the belt's exact tile — no radius check, no proximity tolerance. To put ore on a belt the player digs the tile *directly adjacent to the floor side of the belt's start*, and the resulting `OreDrop` lands at the dug tile's center; if that dug tile happens to be on a belt path, the belt picks it up. (Players learn the geometry through play: "if my belt starts at tile (13,5) facing East, I want to dig at (13,5)? — but I can't, the belt is there. So I dig at (12,5) and the drop lands there, NOT on the belt. To auto-feed, I extend my belt one tile west to (12,5).") See "Risks & open questions" #5 for the discoverability tradeoff.
 
-This is a slight revision from the brainstorm flow. The full reading: belts pick up `OreDrop` sprites that land on (or near, within tile coordinates) the belt tile. Players who want auto-feed dig adjacent to the belt entrance. Players who don't care can keep using the manual flow and walk ore to the smelter as today.
+Worked example:
 
-6. Continuing the example: ore at (12, 5) dig, belt at (13, 5) facing East. Belt at (13, 5) doesn't pick it up because (12, 5) ≠ (13, 5). Player learns to either dig at (13, 5) directly (impossible — belt is on it) or to dig at (14, 5) and place the belt to feed FROM that direction. The placement geometry teaches itself.
-
-7. Smelter at (16, 5): belt chain (13,5) → (14,5) → (15,5) all facing East. Belt (15, 5) is east of (15,5) → next_tile((15,5), East) = (16, 5) = smelter position. So belt at (15, 5) is INPUT to the smelter (points INTO it).
-8. Each tick: ore advances one tile. After 3 ticks ore arrives at (15, 5). Next tick: `smelter_belt_io_system` pulls it into smelter queue, belt (15, 5) is now empty.
-9. Smelter processes for 2s (existing), bar appears in `SmelterState.output`.
-10. Belt at (17, 5) facing East: next_tile((17,5), East) = (18, 5), so belt's direction "agrees with" the direction (17,5) - (16,5) = +X = East. Belt (17, 5) is OUTPUT of the smelter.
-11. `smelter_belt_io_system` pushes the bar onto belt (17, 5).
-12. Bar advances east, reaches end of belt, spills as `OreDrop` floor sprite.
-13. Player vacuums bar, walks to shop, sells. Money += `item_sell_price(Bar(Copper))`.
+1. Player has placed belts at (13,5) → (14,5) → (15,5), all facing East. Smelter at (16,5).
+2. Player digs ore at (13,5)? — impossible, belt is there. Player extends the belt west to (12,5) and digs at (11,5). Drop lands at (11,5), NOT on the belt. Player learns: extend the belt all the way to the dig point.
+3. Player extends to (11,5) facing East, digs at (10,5). Drop lands at (10,5) — still off the belt. Player extends to (10,5). Now any future dig at (9,5) drops on (9,5) which still isn't on the belt — the geometry forces the player to either dig *under* a belt tile (impossible) or accept that the drop lands at the dig site.
+4. **Real workflow:** the player digs at some tile T, the drop appears at T, the player picks the drop up via existing vacuum, and walks ore to the smelter manually (existing M3 flow) — OR the player places the belt's first tile directly underneath where they're about to dig. Concretely: place belt at (13,5) facing East, then dig the *adjacent solid stone* at (12,5) by aiming dig at (12,5) from the belt tile (13,5). The resulting drop lands at (12,5), still off the belt. **The clean auto-feed pattern is to place the belt at a tile the player's dig is going to drop into**, which usually means placing belts inside dig pockets the player has already excavated and continues to excavate from.
+5. Smelter consumption: belt (15,5) faces East, `next_tile((15,5), East) == (16,5)` (smelter position), so (15,5) is an INPUT belt. Each tick: an item on (15,5) is pulled into `SmelterState.queue` if the queue has space.
+6. Smelter processes for 2s (existing), bar appears in `SmelterState.output`.
+7. Belt at (17,5) facing East: belt sits east of the smelter and points further east, so it's an OUTPUT belt. Smelter pushes a bar onto it next tick.
+8. Bar advances east, reaches end of belt, spills as `OreDrop` floor sprite.
+9. Player vacuums bar, walks to shop, sells.
 
 ### Multiplayer: client places a belt
 
