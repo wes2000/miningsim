@@ -21,7 +21,10 @@ impl Plugin for MultiplayerPlugin {
 
         // Replicated components — host writes, all clients read.
         // Grid replicates as a Component on a singleton entity, spawned in
-        // setup_world with Replicated marker (Task 9.5).
+        // setup_world with Replicated marker (Task 9.5). Replication ships a
+        // full Grid snapshot on every change (~MAP_W * MAP_H * sizeof(Tile)
+        // bytes ≈ 16 KB at 80x200). Acceptable at current scale; revisit with
+        // delta encoding if the map grows.
         app.replicate::<Player>()
             .replicate::<SmelterState>()
             .replicate::<Money>()
