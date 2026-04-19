@@ -8,7 +8,7 @@
 
 **Architecture:** Three phases: (A) Resource→Component refactor, one resource per task, gameplay stays playable after each. (B) NetMode CLI + plugin selection scaffold (`SaveLoadPlugin` XOR `MultiplayerPlugin`). (C) Replicon integration: replicated component registration, client-fired event handlers on host, player lifecycle, disconnect handling.
 
-**Tech Stack:** Rust (stable), Bevy 0.15.x (pinned), `bevy_replicon = "0.30"` ([docs.rs](https://docs.rs/crate/bevy_replicon/0.30.1)), `bevy_replicon_renet = "0.5"` (transport adapter).
+**Tech Stack:** Rust (stable), Bevy 0.15.x (pinned), `bevy_replicon = "0.32"` ([docs.rs](https://docs.rs/crate/bevy_replicon/0.32.2)), `bevy_replicon_renet = "0.9"` (transport adapter, hard-pins `bevy_replicon ^0.32`).
 
 ---
 
@@ -26,7 +26,7 @@ If any of these aren't true, stop and resolve before proceeding.
 
 ## Resolved open questions (from spec)
 
-- **`bevy_replicon` version pin:** `bevy_replicon = "0.30"`, `bevy_replicon_renet = "0.5"` — these are the 0.15-compatible releases per [docs.rs](https://docs.rs/crate/bevy_replicon/0.30.1).
+- **`bevy_replicon` version pin:** `bevy_replicon = "0.32"`, `bevy_replicon_renet = "0.9"` — these are the bevy-0.15-compatible releases. (Initially planned 0.30+0.5, but `bevy_replicon_renet 0.5` hard-depends on bevy 0.14; corrected during Task 7.) Notable API renames vs. earlier 0.x snippets in this plan: `ChannelKind`→`Channel`, `ReplicationPlugins`→`RepliconPlugins`, `ServerEvent`→`ClientConnected`/`ClientDisconnected` triggers, `ClientId` removed from prelude (clients are entities with `ConnectedClient`), serialization is `postcard` (not `bincode`), default visibility policy is `Blacklist`. Adapt subsequent tasks' code snippets to the 0.32 API where they reference older names.
 - **Host self-ClientId:** replicon's host-as-server model does NOT assign a ClientId to the host's own player. We do NOT use the per-connection spawn handler (`spawn_player_for_new_clients`) for the host's player — instead, the host's local Player is spawned at `setup_world` with `LocalPlayer` already attached, just like single-player. The per-connection spawn handler only runs for actual remote client connections.
 
 ---
@@ -800,8 +800,8 @@ Human controller verifies:
 ```toml
 [dependencies]
 bevy = "0.15"
-bevy_replicon = "0.30"
-bevy_replicon_renet = "0.5"
+bevy_replicon = "0.32"
+bevy_replicon_renet = "0.9"
 rand = "0.8"
 ron = "0.8"
 serde = { version = "1", features = ["derive"] }
