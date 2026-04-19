@@ -247,13 +247,23 @@ Startup chain extends to include the load step at the end:
 ).chain())
 ```
 
-Update chain adds three new systems, all in `UiSet` (they're
-input-driven UI flows, not gameplay logic):
+Update chain adds three new systems in a dedicated `UiSet::SaveLoad`
+variant (separate from HUD so future HUD reorderings don't accidentally
+move file IO):
+
 ```rust
-save_load::save_hotkey_system.in_set(UiSet::Hud),
-save_load::load_hotkey_system.in_set(UiSet::Hud),
-save_load::auto_save_on_exit_system.in_set(UiSet::Hud),
+// app.rs SystemSet enum gains a SaveLoad variant on UiSet:
+pub enum UiSet { Hud, SaveLoad, Camera }
+
+// Update registration:
+save_load::save_hotkey_system.in_set(UiSet::SaveLoad),
+save_load::load_hotkey_system.in_set(UiSet::SaveLoad),
+save_load::auto_save_on_exit_system.in_set(UiSet::SaveLoad),
 ```
+
+`configure_sets` order: `... UiSet::Hud → UiSet::SaveLoad → UiSet::Camera`.
+File IO runs after the HUD has had a chance to refresh on whatever the
+last frame's input did, so an F5 captures the visible state.
 
 ### `Cargo.toml` (modified)
 
@@ -276,7 +286,7 @@ ron = "0.8"
 ### Startup with a valid save
 1. Same through step 2 — fresh world built.
 2. `startup_load_system` reads `./save.ron`, deserializes, version-checks, calls `apply()` — overwrites Grid, Inventory, Money, OwnedTools, SmelterState, Player Transform.
-3. Next frame: `chunk_lifecycle_system` despawns existing chunks and spawns fresh ones reflecting the loaded grid (chunk lifecycle uses Grid as truth; previous-fresh chunks become stale).
+3. First Update tick: `chunk_lifecycle_system` runs against the (now-loaded) Grid. Since startup completes before any Update tick, **no chunks have been spawned yet** — lifecycle spawns them directly from the loaded grid. No visible "fresh-then-loaded" flash on startup. (Mid-session F9 IS subject to a 1-frame churn while existing chunks despawn and respawn — see below — acceptable.)
 4. HUD update systems detect `Changed<Inventory>`, `Changed<Money>`, `Changed<OwnedTools>` and refresh.
 5. Smelter panel update detects `Changed<SmelterState>` and refreshes.
 6. Game continues from the saved state.
@@ -397,7 +407,8 @@ Not unit-tested. Manual playtest validates IO behavior and integration.
 
 - Whether `Grid` exposes its inner state via field visibility or via a small `GridRepr` shim for serde. Aesthetic choice; both work.
 - Whether `apply()` should also write a Bevy event (`SaveLoaded`) for downstream systems to observe. Not needed for M3.5; useful for M4 if peers want to know "the world just changed under me." Skip for now.
-- Whether to expose `SAVE_PATH` as a configurable Resource for tests / dev override. Default `./save.ron` const is fine; tests use temp dirs via `tempfile` crate if needed (or just use the constant and clean up after).
+- Whether to expose `SAVE_PATH` as a configurable Resource for tests / dev override. Default `./save.ron` const is fine. **Decision for this milestone: tests stay purely in-memory** (round-trip via `serialize_ron`/`deserialize_ron` strings), so no `tempfile` dev-dep is needed. File IO is exercised only by manual playtest.
+- `ron 0.8`'s `serialize_ron` returns `ron::Error` while `deserialize_ron`'s parse arm holds a `ron::error::SpannedError`. That's the official 0.8 API shape — different types for ser vs de — and both wrap into our `LoadError` cleanly. Implementer should not be surprised.
 
 ---
 
