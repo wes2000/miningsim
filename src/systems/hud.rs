@@ -164,10 +164,14 @@ fn spawn_pair_row(parent: &mut ChildBuilder, ore: OreKind) {
                 BackgroundColor(item_color(bar_item)),
             ));
             row.spawn((
-                Text::new("0"),
-                TextFont { font_size: 18.0, ..default() },
-                ItemCountText(bar_item),
-            ));
+                Node { width: Val::Px(50.0), ..default() },
+            )).with_children(|cell| {
+                cell.spawn((
+                    Text::new("0"),
+                    TextFont { font_size: 18.0, ..default() },
+                    ItemCountText(bar_item),
+                ));
+            });
         });
 }
 

@@ -198,7 +198,7 @@ pub fn dig_input_system(
                             custom_size: Some(Vec2::splat(6.0)),
                             ..default()
                         },
-                        Transform::from_translation(tile_center.extend(5.0)),
+                        Transform::from_translation(tile_center.extend(4.0)),
                     ));
                 }
             }
