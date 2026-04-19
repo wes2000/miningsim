@@ -14,6 +14,17 @@ pub struct LocalPlayer;
 #[derive(Component)]
 pub struct RemotePlayer;
 
+/// Server-side bookkeeping: links a Player entity to the replicon connection
+/// (an `Entity` representing the connected client; see
+/// `bevy_replicon::shared::backend::connected_client::ConnectedClient`) that
+/// owns it. Inserted at player-spawn time on the host (Task 12). Absent on the
+/// host's own local Player — the host mutates its own components directly via
+/// the existing single-player code path. The server-side request handlers in
+/// `MultiplayerPlugin` use this to route remote-client events to the correct
+/// per-client Player entity.
+#[derive(Component, Debug)]
+pub struct OwningClient(pub Entity);
+
 #[derive(Component, Default)]
 pub struct Velocity(pub Vec2);
 

@@ -2,15 +2,21 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use bevy_replicon_renet::RepliconRenetPlugins;
 
-use crate::components::Player;
-use crate::economy::Money;
+use crate::components::{ChunkDirty, OreDrop, OwningClient, Player, TerrainChunk};
+use crate::coords::{tile_center_world, world_to_tile};
+use crate::dig::{self, DigStatus};
+use crate::economy::{self, Money};
 use crate::grid::Grid;
 use crate::inventory::Inventory;
-use crate::processing::SmelterState;
+use crate::items::ItemKind;
+use crate::processing::{self, SmelterState};
+use crate::systems::chunk_lifecycle::CHUNK_TILES;
+use crate::systems::hud::item_color;
 use crate::systems::net_events::{
     BuyToolRequest, CollectAllRequest, DigRequest, SellAllRequest, SmeltAllRequest,
 };
-use crate::tools::OwnedTools;
+use crate::systems::player::DIG_REACH_TILES;
+use crate::tools::{self, OwnedTools};
 
 pub struct MultiplayerPlugin;
 
@@ -40,6 +46,156 @@ impl Plugin for MultiplayerPlugin {
         app.add_client_event::<CollectAllRequest>(Channel::Ordered);
         app.add_client_event::<SellAllRequest>(Channel::Ordered);
 
+        // Server-side request handlers. Run only when this app is acting as
+        // the server (replicon's `server_running` condition). The host's own
+        // local Player is NOT mutated here — the host UI/input keeps mutating
+        // its own components directly via the single-player code path; only
+        // events from REMOTE clients reach these handlers (their Player
+        // entities carry an `OwningClient` component, inserted by Task 12).
+        app.add_systems(
+            Update,
+            (
+                handle_dig_requests,
+                handle_buy_tool_requests,
+                handle_smelt_all_requests,
+                handle_collect_all_requests,
+                handle_sell_all_requests,
+            )
+                .run_if(server_running),
+        );
+
         // Mode-specific startup wiring lands in Task 12.
+    }
+}
+
+/// Find the Player entity owned by `client_entity` (the replicon
+/// connected-client entity). Returns `None` for events whose sender has no
+/// matching Player yet (race during connect / before Task 12 spawns one) or
+/// for the host's own local Player (which has no `OwningClient` component).
+fn player_entity_for_client(
+    client_entity: Entity,
+    q: &Query<(Entity, &OwningClient), With<Player>>,
+) -> Option<Entity> {
+    q.iter()
+        .find_map(|(e, owning)| (owning.0 == client_entity).then_some(e))
+}
+
+pub fn handle_dig_requests(
+    mut events: EventReader<FromClient<DigRequest>>,
+    grid: Single<&mut Grid>,
+    mut commands: Commands,
+    player_q: Query<(Entity, &OwningClient), With<Player>>,
+    player_data_q: Query<(&Transform, &OwnedTools), With<Player>>,
+    chunks_q: Query<(Entity, &TerrainChunk)>,
+) {
+    let mut grid = grid.into_inner();
+    for FromClient { client_entity, event } in events.read() {
+        let Some(player_entity) = player_entity_for_client(*client_entity, &player_q) else {
+            continue;
+        };
+        let Ok((player_xf, owned)) = player_data_q.get(player_entity) else { continue };
+
+        let player_tile = world_to_tile(player_xf.translation.truncate());
+        if !dig::dig_target_valid(player_tile, event.target, DIG_REACH_TILES as i32, &grid) {
+            continue;
+        }
+        let Some(tile) = grid.get(event.target.x, event.target.y).copied() else { continue };
+        let Some(tool) = tools::best_applicable_tool(owned, tile.layer) else { continue };
+
+        let result = dig::try_dig(&mut grid, event.target, tool);
+        match result.status {
+            DigStatus::Broken | DigStatus::Damaged => {
+                // Mark owning chunk dirty for the host's re-mesh. NOTE:
+                // remote clients receive the new Grid via replication but
+                // currently have no system that re-marks ChunkDirty on Grid
+                // change — they won't see the dig visually until that's
+                // wired up. Flagged for Task 12.
+                let chunk_coord = IVec2::new(
+                    event.target.x.div_euclid(CHUNK_TILES),
+                    event.target.y.div_euclid(CHUNK_TILES),
+                );
+                for (e, c) in chunks_q.iter() {
+                    if c.coord == chunk_coord {
+                        commands.entity(e).insert(ChunkDirty);
+                        break;
+                    }
+                }
+                if result.status == DigStatus::Broken {
+                    if let Some(ore) = result.ore {
+                        let item = ItemKind::Ore(ore);
+                        let world_pos = tile_center_world(event.target);
+                        commands.spawn((
+                            OreDrop { item },
+                            Sprite {
+                                color: item_color(item),
+                                custom_size: Some(Vec2::splat(6.0)),
+                                ..default()
+                            },
+                            Transform::from_translation(world_pos.extend(4.0)),
+                            Replicated,
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn handle_buy_tool_requests(
+    mut events: EventReader<FromClient<BuyToolRequest>>,
+    player_q: Query<(Entity, &OwningClient), With<Player>>,
+    mut money_q: Query<(&mut Money, &mut OwnedTools), With<Player>>,
+) {
+    for FromClient { client_entity, event } in events.read() {
+        let Some(e) = player_entity_for_client(*client_entity, &player_q) else { continue };
+        let Ok((mut money, mut owned)) = money_q.get_mut(e) else { continue };
+        let _ = economy::try_buy(event.tool, &mut money, &mut owned);
+    }
+}
+
+pub fn handle_smelt_all_requests(
+    mut events: EventReader<FromClient<SmeltAllRequest>>,
+    player_q: Query<(Entity, &OwningClient), With<Player>>,
+    mut inv_q: Query<&mut Inventory, With<Player>>,
+    mut smelter_q: Query<&mut SmelterState>,
+) {
+    for FromClient { client_entity, event } in events.read() {
+        let Some(e) = player_entity_for_client(*client_entity, &player_q) else { continue };
+        let Ok(mut inv) = inv_q.get_mut(e) else { continue };
+        let Ok(mut state) = smelter_q.get_single_mut() else { continue };
+        let count = inv.get(ItemKind::Ore(event.ore));
+        if count == 0 || processing::is_busy(&state) { continue; }
+        inv.remove(ItemKind::Ore(event.ore), count);
+        processing::start_smelting(&mut state, event.ore, count);
+    }
+}
+
+pub fn handle_collect_all_requests(
+    mut events: EventReader<FromClient<CollectAllRequest>>,
+    player_q: Query<(Entity, &OwningClient), With<Player>>,
+    mut inv_q: Query<&mut Inventory, With<Player>>,
+    mut smelter_q: Query<&mut SmelterState>,
+) {
+    for FromClient { client_entity, .. } in events.read() {
+        let Some(e) = player_entity_for_client(*client_entity, &player_q) else { continue };
+        let Ok(mut inv) = inv_q.get_mut(e) else { continue };
+        let Ok(mut state) = smelter_q.get_single_mut() else { continue };
+        let drained = processing::collect_output(&mut state);
+        for (ore, n) in drained {
+            inv.add(ItemKind::Bar(ore), n);
+        }
+    }
+}
+
+pub fn handle_sell_all_requests(
+    mut events: EventReader<FromClient<SellAllRequest>>,
+    player_q: Query<(Entity, &OwningClient), With<Player>>,
+    mut inv_money_q: Query<(&mut Inventory, &mut Money), With<Player>>,
+) {
+    for FromClient { client_entity, .. } in events.read() {
+        let Some(e) = player_entity_for_client(*client_entity, &player_q) else { continue };
+        let Ok((mut inv, mut money)) = inv_money_q.get_mut(e) else { continue };
+        economy::sell_all(&mut inv, &mut money);
     }
 }
