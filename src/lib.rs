@@ -6,6 +6,7 @@ pub mod economy;
 pub mod grid;
 pub mod inventory;
 pub mod items;
+pub mod net;
 pub mod processing;
 pub mod save;
 pub mod systems;
