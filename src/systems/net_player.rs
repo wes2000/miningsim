@@ -1,5 +1,5 @@
 //! Multiplayer player lifecycle, transport setup, and Grid-replication
-//! re-mesh wiring (Task 12 + Task 10 follow-up).
+//! re-mesh wiring (Task 12 + Task 10 follow-up + Task 13 client-disconnect).
 //!
 //! Responsibilities:
 //!   * `start_net_mode_system`         — bind UDP / connect to host based on `NetMode`.
@@ -14,6 +14,8 @@
 //!   * `mark_chunks_dirty_on_grid_change` — when Grid mutates (notably from a remote
 //!                                       host's dig replicating to a client), flag every
 //!                                       TerrainChunk so chunk_render rebuilds it.
+//!   * `exit_on_host_disconnect`       — client-side; log + emit `AppExit` when the
+//!                                       host drops the connection.
 //!
 //! Approach for "which Player is mine?": `NetOwner(u64)` carries the renet
 //! `client_id`. The server sets it from `NetworkId` on the just-connected client
