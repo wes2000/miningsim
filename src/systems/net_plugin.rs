@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use bevy_replicon_renet::RepliconRenetPlugins;
 
-use crate::components::{ChunkDirty, OreDrop, OwningClient, Player, TerrainChunk};
+use crate::components::{ChunkDirty, NetOwner, OreDrop, OwningClient, Player, TerrainChunk};
 use crate::coords::{tile_center_world, world_to_tile};
 use crate::dig::{self, DigStatus};
 use crate::economy::{self, Money};
@@ -15,6 +15,7 @@ use crate::systems::hud::item_color;
 use crate::systems::net_events::{
     BuyToolRequest, CollectAllRequest, DigRequest, SellAllRequest, SmeltAllRequest,
 };
+use crate::systems::net_player;
 use crate::systems::player::DIG_REACH_TILES;
 use crate::tools::{self, OwnedTools};
 
@@ -32,6 +33,7 @@ impl Plugin for MultiplayerPlugin {
         // bytes ≈ 16 KB at 80x200). Acceptable at current scale; revisit with
         // delta encoding if the map grows.
         app.replicate::<Player>()
+            .replicate::<NetOwner>()
             .replicate::<SmelterState>()
             .replicate::<Money>()
             .replicate::<Grid>()
@@ -64,7 +66,28 @@ impl Plugin for MultiplayerPlugin {
                 .run_if(server_running),
         );
 
-        // Mode-specific startup wiring lands in Task 12.
+        // Transport setup (host: bind UDP; client: connect to addr).
+        app.add_systems(Startup, net_player::start_net_mode_system);
+
+        // Player lifecycle (server-only; observers fire only when ConnectedClient
+        // entities are spawned/despawned, which only happens on the server side).
+        app.add_observer(net_player::spawn_player_for_new_clients);
+        app.add_observer(net_player::despawn_player_for_disconnected_clients);
+
+        // Client-side: tag arriving Players LocalPlayer/RemotePlayer + add Sprite.
+        app.add_systems(
+            Update,
+            net_player::mark_local_player_on_arrival.run_if(client_connected),
+        );
+
+        // Visual sync (idempotent; cheap to always run).
+        app.add_systems(Update, net_player::sync_remote_player_visuals);
+
+        // When the singleton Grid changes via replication, re-mesh chunks.
+        // Runs on host AND client — host's chunks are already kept dirty by
+        // `handle_dig_requests`'s targeted insert, but a global re-dirty here
+        // is harmless (chunk_render is idempotent).
+        app.add_systems(Update, net_player::mark_chunks_dirty_on_grid_change);
     }
 }
 
@@ -80,9 +103,6 @@ fn player_entity_for_client(
         .find_map(|(e, owning)| (owning.0 == client_entity).then_some(e))
 }
 
-// TODO(Task 12): clients receive Grid mutations via replication but no
-// system re-marks ChunkDirty on Grid change there — remote peers won't see
-// dig results visually until that's wired up.
 pub fn handle_dig_requests(
     mut events: EventReader<FromClient<DigRequest>>,
     grid: Single<&mut Grid>,

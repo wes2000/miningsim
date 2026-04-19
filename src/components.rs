@@ -22,8 +22,26 @@ pub struct RemotePlayer;
 /// the existing single-player code path. The server-side request handlers in
 /// `MultiplayerPlugin` use this to route remote-client events to the correct
 /// per-client Player entity.
+///
+/// Intentionally NOT replicated: the contained `Entity` is a server-side ID
+/// that has no meaning on the client. Clients use [`NetOwner`] (carries the
+/// renet client_id u64) to identify which Player is theirs.
 #[derive(Component, Debug)]
 pub struct OwningClient(pub Entity);
+
+/// Replicated marker carrying the renet `client_id` (u64) of the player's
+/// owning client. Server inserts it on every Player spawn (host's own local
+/// Player gets `NetOwner(0)` so remote clients can render it as a remote peer).
+/// Clients compare it against [`LocalClientId`] to decide LocalPlayer vs.
+/// RemotePlayer when arriving Players are tagged.
+#[derive(Component, Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct NetOwner(pub u64);
+
+/// Resource on the client carrying the renet `client_id` we used at connect
+/// time, so [`NetOwner`] arriving over replication can be matched against it.
+/// Inserted by `start_net_mode_system` on the client. Absent on host/single-player.
+#[derive(bevy::prelude::Resource, Debug, Clone, Copy)]
+pub struct LocalClientId(pub u64);
 
 #[derive(Component, Default)]
 pub struct Velocity(pub Vec2);

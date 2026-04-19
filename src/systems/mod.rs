@@ -3,6 +3,7 @@ pub mod chunk_lifecycle;
 pub mod chunk_render;
 pub mod hud;
 pub mod net_events;
+pub mod net_player;
 pub mod net_plugin;
 pub mod ore_drop;
 pub mod player;

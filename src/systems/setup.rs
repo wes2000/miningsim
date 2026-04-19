@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_replicon::prelude::Replicated;
-use crate::components::{Facing, InventoryPopupOpen, LocalPlayer, MainCamera, Player, Shop, ShopUiOpen, Smelter, SmelterUiOpen, Velocity};
+use crate::components::{Facing, InventoryPopupOpen, LocalPlayer, MainCamera, NetOwner, Player, Shop, ShopUiOpen, Smelter, SmelterUiOpen, Velocity};
 use crate::coords::tile_center_world;
 use crate::economy::Money;
 use crate::inventory::Inventory;
@@ -26,10 +26,13 @@ pub fn setup_world(mut commands: Commands) {
     commands.insert_resource(SmelterUiOpen::default());
     commands.insert_resource(InventoryPopupOpen::default());
 
-    // Player
+    // Player. `NetOwner(HOST_NET_OWNER=0)` + `Replicated` mark this as the
+    // host's player so remote clients see it as a peer (RemotePlayer-tagged
+    // sprite). Both are no-ops in single-player.
     commands.spawn((
         Player,
         LocalPlayer,
+        NetOwner(crate::systems::net_player::HOST_NET_OWNER),
         Velocity::default(),
         Facing::default(),
         Money::default(),
@@ -41,6 +44,7 @@ pub fn setup_world(mut commands: Commands) {
             ..default()
         },
         Transform::from_translation(player_world.extend(10.0)),
+        Replicated,
     ));
 
     // Shop
