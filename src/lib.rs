@@ -5,6 +5,7 @@ pub mod dig;
 pub mod economy;
 pub mod grid;
 pub mod inventory;
+pub mod items;
 pub mod systems;
 pub mod terrain_gen;
 pub mod tools;
