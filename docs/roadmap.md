@@ -320,6 +320,61 @@ clean `ItemKind { Ore(OreKind), Bar(OreKind) }` partition.
   whether `MachineSet` should split into `MachineUpdate` / `MachineUi`
   sub-sets when that lands.
 
+## Playtest Results — Save/Load Mini-Milestone (2026-04-18)
+
+Exit-criteria met: F5 saves to `./save.ron`, F9 loads, closing the window
+auto-saves, restarting the game loads any existing save automatically.
+Mid-process smelter state (active recipe + queue + output buffer) survives
+save/load. Hand-corrupting the save or bumping the `version` field falls
+back gracefully to a fresh world without crashing. Schema version field
+is `1`; future schema changes bump and silently discard old saves (no
+migration logic — by design for now).
+
+**What felt good:**
+- The pure-module discipline from M1–M3 paid off. Adding `serde` derives
+  to `Grid`, `Tile`, `Layer`, `OreKind`, `ItemKind`, `Inventory`, `Money`,
+  `Tool`, `OwnedTools`, `SmelterState` was mechanical — every persistent
+  type was already a plain Rust value type with no Bevy lifecycle
+  surface to navigate.
+- Hand-rolled `SaveData` struct + collect/apply was the right call over
+  Bevy reflection. Pure-Rust round-trip tests cover the serialization
+  layer headlessly without spinning up an `App`.
+- `apply()` being idempotent (proven by a dedicated test) means F9-spam
+  is safe and the function composes cleanly with Bevy's resource
+  change-detection — every `Changed<...>` ripple fires exactly once per
+  load.
+- The startup-load path (`setup_world` always runs unconditionally → load
+  overwrites if a save exists) means a missing or corrupt save can never
+  block the game from starting. Defensive but cheap.
+- 4-system shape (F5 / F9 / startup-load / AppExit) parallels the M2/M3
+  shop+smelter UI pattern (interact + sync + handle), so the code reads
+  consistently with the rest of the systems directory.
+
+**What felt off (no fixes needed for this milestone):**
+- The `auto_save_on_exit_system` correctly wires `EventReader<AppExit>`
+  but in practice Bevy's window-close path emits the event one frame
+  before final shutdown, which gives our system exactly one tick to
+  serialize and write. Works fine at our save sizes (~80–250 KB) but
+  worth re-examining if save sizes ever grow into the megabytes (M5
+  conveyor automation, M6 multi-property).
+- No save backup / `.bak` rotation. If a write is interrupted mid-flush
+  the player loses both the prior save and the in-progress one. Standard
+  game-jam-tier behaviour; revisit before any public build.
+
+**Decisions for milestone 4 (networking):**
+- `serde` derives now exist on every persistent type — `bevy_replicon`
+  or `lightyear` should be able to consume them with minimal additional
+  glue.
+- `SaveData` doubles as a viable "snapshot" type for late-join sync in
+  authoritative-server netcode. Worth comparing against `bevy_replicon`'s
+  per-component replication model before committing.
+- The 87-test pure-module suite is now the de facto contract for
+  serialization; M4 can extend `tests/save.rs` with networking-specific
+  scenarios (snapshot delta, replication conflict) without restructuring.
+- `LoadError` enum (Io / Parse / VersionMismatch) is the obvious base for
+  M4's "join failed" / "schema mismatch" / "host disconnected" error
+  surface. Likely renamed to `WorldLoadError` and extended.
+
 ## What This Document Is Not
 
 - Not a spec. Specs live in `docs/superpowers/specs/` and are per-milestone.
