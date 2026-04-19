@@ -166,11 +166,22 @@ pub fn spawn_player_for_new_clients(
     trigger: Trigger<OnAdd, ConnectedClient>,
     mut commands: Commands,
     network_ids: Query<&NetworkId>,
+    grid_q: Query<&crate::grid::Grid>,
 ) {
     let client_entity = trigger.entity();
     // The NetworkId is required by replicon_renet's backend; if missing, fall
     // back to entity index (won't match anything client-side, but avoids crash).
     let net_owner = network_ids.get(client_entity).map(|n| n.get()).unwrap_or(0);
+    // Spawn the joining player at the host's spawn-pocket (same path setup_world
+    // uses). Falls back to world origin if the Grid singleton isn't available —
+    // shouldn't happen on host since setup_world always spawned it, but defensive.
+    let spawn_world = grid_q
+        .get_single()
+        .map(|g| {
+            let (sx, sy) = crate::terrain_gen::spawn_tile(g);
+            crate::coords::tile_center_world(IVec2::new(sx, sy))
+        })
+        .unwrap_or(Vec2::ZERO);
     info!("spawning player for connected client `{client_entity}` (network_id {net_owner})");
     commands.spawn((
         Player,
@@ -179,9 +190,7 @@ pub fn spawn_player_for_new_clients(
         Money::default(),
         Inventory::default(),
         OwnedTools::default(),
-        // Spawn at world origin — joining-player position will improve when we
-        // have a real spawn-finder; for now this is fine for smoke tests.
-        Transform::from_xyz(0.0, 0.0, 10.0),
+        Transform::from_translation(spawn_world.extend(10.0)),
         Replicated,
     ));
 }
