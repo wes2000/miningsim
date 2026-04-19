@@ -18,7 +18,6 @@ pub fn setup_world(mut commands: Commands) {
     let player_world = tile_center_world(IVec2::new(sp.0, sp.1));
 
     commands.insert_resource(grid);
-    commands.insert_resource(Inventory::default());
     commands.insert_resource(crate::systems::player::DigCooldown::default());
     commands.insert_resource(OwnedTools::default());
     commands.insert_resource(ShopUiOpen::default());
@@ -32,6 +31,7 @@ pub fn setup_world(mut commands: Commands) {
         Velocity::default(),
         Facing::default(),
         Money::default(),
+        Inventory::default(),
         Sprite {
             color: Color::srgb(0.30, 0.60, 0.90),
             custom_size: Some(Vec2::splat(12.0)),

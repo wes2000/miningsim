@@ -125,15 +125,14 @@ pub fn update_shop_labels_system(
 pub fn handle_shop_buttons_system(
     ui_open: Res<ShopUiOpen>,
     interaction_q: Query<(&Interaction, &ShopButtonKind), Changed<Interaction>>,
-    mut inv: ResMut<Inventory>,
-    local_player: Single<&mut Money, With<LocalPlayer>>,
+    local_player: Single<(&mut Money, &mut Inventory), With<LocalPlayer>>,
     mut owned: ResMut<OwnedTools>,
 ) {
     // Defense-in-depth: Bevy does not deliver Interaction events for hidden UI,
     // but guard here in case system ordering changes or the UI is force-hidden
     // mid-frame.
     if !ui_open.0 { return; }
-    let mut money = local_player.into_inner();
+    let (mut money, mut inv) = local_player.into_inner();
     for (interaction, kind) in interaction_q.iter() {
         if *interaction != Interaction::Pressed { continue; }
         match kind {

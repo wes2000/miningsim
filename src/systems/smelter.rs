@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use crate::components::{
-    Player, Smelter, SmelterButtonKind, SmelterStatusText, SmelterUiOpen, SmelterUiRoot,
+    LocalPlayer, Player, Smelter, SmelterButtonKind, SmelterStatusText, SmelterUiOpen, SmelterUiRoot,
 };
 use crate::coords::TILE_SIZE_PX;
 use crate::inventory::Inventory;
@@ -133,7 +133,7 @@ pub fn sync_smelter_visibility_system(
 }
 
 pub fn update_smelter_panel_system(
-    inv: Res<Inventory>,
+    local_inv: Single<&Inventory, With<LocalPlayer>>,
     state_q: Query<&SmelterState>,
     status_q: Query<Entity, With<SmelterStatusText>>,
     buttons_q: Query<(&SmelterButtonKind, &Children, Entity)>,
@@ -141,6 +141,7 @@ pub fn update_smelter_panel_system(
     mut texts_q: Query<&mut Text>,
 ) {
     let Ok(state) = state_q.get_single() else { return };
+    let inv = local_inv.into_inner();
     // Always refresh — SmelterState may have changed (tick mutates time_left every frame)
     // and inventory may have changed; combined gating is messy and the work is cheap.
 
@@ -194,11 +195,12 @@ pub fn update_smelter_panel_system(
 pub fn handle_smelter_buttons_system(
     ui_open: Res<SmelterUiOpen>,
     interaction_q: Query<(&Interaction, &SmelterButtonKind), Changed<Interaction>>,
-    mut inv: ResMut<Inventory>,
+    local_inv: Single<&mut Inventory, With<LocalPlayer>>,
     mut state_q: Query<&mut SmelterState>,
 ) {
     if !ui_open.0 { return; }
     let Ok(mut state) = state_q.get_single_mut() else { return };
+    let mut inv = local_inv.into_inner();
     for (interaction, kind) in interaction_q.iter() {
         if *interaction != Interaction::Pressed { continue; }
         match kind {

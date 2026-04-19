@@ -1,11 +1,11 @@
-use std::collections::HashMap;
-use bevy::prelude::Resource;
+use std::collections::BTreeMap;
+use bevy::prelude::Component;
 use serde::{Deserialize, Serialize};
 use crate::items::ItemKind;
 
-#[derive(Debug, Default, Clone, Resource, Serialize, Deserialize)]
+#[derive(Component, Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Inventory {
-    counts: HashMap<ItemKind, u32>,
+    counts: BTreeMap<ItemKind, u32>,
 }
 
 impl Inventory {
