@@ -1,18 +1,20 @@
 use bevy::prelude::Resource;
 
-use crate::grid::OreType;
 use crate::inventory::Inventory;
+use crate::items::{ItemKind, OreKind, ALL_ITEMS};
 use crate::tools::{OwnedTools, Tool};
 
 #[derive(Debug, Default, Resource)]
 pub struct Money(pub u32);
 
-pub fn ore_sell_price(ore: OreType) -> u32 {
-    match ore {
-        OreType::None => 0,
-        OreType::Copper => 1,
-        OreType::Silver => 5,
-        OreType::Gold => 20,
+pub fn item_sell_price(item: ItemKind) -> u32 {
+    match item {
+        ItemKind::Ore(OreKind::Copper) => 1,
+        ItemKind::Ore(OreKind::Silver) => 5,
+        ItemKind::Ore(OreKind::Gold)   => 20,
+        ItemKind::Bar(OreKind::Copper) => 5,
+        ItemKind::Bar(OreKind::Silver) => 25,
+        ItemKind::Bar(OreKind::Gold)   => 100,
     }
 }
 
@@ -26,11 +28,11 @@ pub fn tool_buy_price(tool: Tool) -> u32 {
 }
 
 pub fn sell_all(inv: &mut Inventory, money: &mut Money) {
-    for ore in [OreType::Copper, OreType::Silver, OreType::Gold] {
-        let count = inv.get(ore);
+    for item in ALL_ITEMS {
+        let count = inv.get(item);
         if count == 0 { continue; }
-        money.0 += ore_sell_price(ore) * count;
-        inv.remove(ore, count);
+        money.0 += item_sell_price(item) * count;
+        inv.remove(item, count);
     }
 }
 

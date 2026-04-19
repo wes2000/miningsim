@@ -1,17 +1,18 @@
 use bevy::prelude::IVec2;
 use miningsim::dig::{self, DigStatus};
-use miningsim::grid::{Grid, Layer, OreType, Tile};
+use miningsim::grid::{Grid, Layer, Tile};
+use miningsim::items::OreKind;
 use miningsim::tools::Tool;
 
 fn make_test_grid() -> Grid {
     let mut g = Grid::new(10, 10);
     // Fill interior with solid Dirt tiles (Grid default).
     // Override specific tiles:
-    g.set(3, 3, Tile { solid: true, layer: Layer::Dirt,  ore: OreType::Copper, damage: 0 });
-    g.set(4, 3, Tile { solid: true, layer: Layer::Stone, ore: OreType::None,   damage: 0 });
-    g.set(5, 3, Tile { solid: true, layer: Layer::Deep,  ore: OreType::None,   damage: 0 });
-    g.set(6, 3, Tile { solid: true, layer: Layer::Core,  ore: OreType::None,   damage: 0 });
-    g.set(0, 0, Tile { solid: true, layer: Layer::Bedrock, ore: OreType::None, damage: 0 });
+    g.set(3, 3, Tile { solid: true, layer: Layer::Dirt,  ore: Some(OreKind::Copper), damage: 0 });
+    g.set(4, 3, Tile { solid: true, layer: Layer::Stone, ore: None,                  damage: 0 });
+    g.set(5, 3, Tile { solid: true, layer: Layer::Deep,  ore: None,                  damage: 0 });
+    g.set(6, 3, Tile { solid: true, layer: Layer::Core,  ore: None,                  damage: 0 });
+    g.set(0, 0, Tile { solid: true, layer: Layer::Bedrock, ore: None,                damage: 0 });
     g
 }
 
@@ -29,7 +30,7 @@ fn shovel_on_dirt_at_tier_takes_three_strikes() {
     assert_eq!(g.get(3, 3).unwrap().damage, 2);
     let r3 = dig::try_dig(&mut g, t, Tool::Shovel);
     assert_eq!(r3.status, DigStatus::Broken);
-    assert_eq!(r3.ore, OreType::Copper);
+    assert_eq!(r3.ore, Some(OreKind::Copper));
     assert!(!g.get(3, 3).unwrap().solid);
     assert_eq!(g.get(3, 3).unwrap().damage, 0);
 }
@@ -156,7 +157,7 @@ fn dig_target_valid_rejects_when_intermediate_tile_is_solid() {
 fn dig_target_valid_accepts_reach_2_when_intermediate_is_empty() {
     let mut g = Grid::new(10, 10);
     // clear the intermediate tile
-    let t = Tile { solid: false, layer: Layer::Dirt, ore: OreType::None, damage: 0 };
+    let t = Tile { solid: false, layer: Layer::Dirt, ore: None, damage: 0 };
     g.set(6, 5, t);
     let p = IVec2::new(5, 5);
     assert!(dig::dig_target_valid(p, IVec2::new(7, 5), 2, &g));

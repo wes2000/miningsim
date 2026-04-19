@@ -256,6 +256,70 @@ current-tool HUD rows all functioning.
   upgrades amplify the felt absence — a pickaxe should sound different
   from a shovel. Pencil in for M7 polish unless it bothers us during M3.
 
+## Playtest Results — Milestone 3 (2026-04-18)
+
+Exit-criteria met: full **dig → smelt → collect → sell → upgrade → dig deeper**
+loop works on the single property. Smelter takes raw ore, processes it on a
+2-second-per-item timer with a queue + output buffer; player can walk away
+mid-process. Bars sell at 5× ore prices. M2 cleanups (extract `coords::*`
+helpers; affordability state on Shop Buy buttons) shipped as M3 Tasks 1–2 and
+the `OreType::None` sentinel was retired in favour of `Option<OreKind>` plus a
+clean `ItemKind { Ore(OreKind), Bar(OreKind) }` partition.
+
+**What felt good:**
+- The processing loop reads as a real factory step. "Drop in 5 copper, walk
+  off to mine more, come back to a stack of bars" closes the gameplay loop
+  the spec promised, and the 5× bar markup makes the trip feel worthwhile
+  rather than busywork.
+- The big atomic refactor (Task 4) landed without behavioural regressions
+  thanks to the pure-data layer being well-isolated from Bevy systems.
+  Swapping `Tile.ore` from `OreType` to `Option<OreKind>` and
+  `Inventory<OreType>` to `Inventory<ItemKind>` was almost entirely
+  mechanical once the test bodies were rewritten first.
+- Named `SystemSet`s organise the now-23-system Update chain readably.
+  `InputSet → WorldSet → MachineSet → UiSet` reads top-down like a frame
+  pipeline.
+- Coords helpers immediately paid for themselves — adding the Smelter
+  entity took one `tile_center_world(IVec2::new(sp.0 - 3, sp.1))` call
+  instead of four lines of inline Y-inverting math.
+
+**What felt off (and was fixed mid-flight):**
+- The HUD's six-item ore+bar list plus money + current-tool stack
+  overflowed the top-left and pushed against game world. **Redesigned**:
+  slim coin counter top-right (always visible), Tab toggles a popup
+  showing `[ore swatch | count → bar swatch | count]` rows + a Tools
+  section with active/owned/locked status per tool. Reads cleaner and
+  scales when M6 adds processed-good families.
+
+**Decisions for the next milestone:**
+- **Save/load is the natural next mini-milestone** — focused, contained,
+  unblocks netcode. All persistent state (`Grid`, `Inventory`, `Money`,
+  `OwnedTools`, `SmelterState`) is plain Rust types in pure modules, so a
+  serde derive + a single load/save system is most of the work. Should be
+  a 4–5 task milestone, not a full M-sized effort.
+- **M4 (networking) brings serialization too.** If save/load lands first,
+  the netcode work inherits the serde wiring. If not, both can land
+  together. Lean toward save/load first because it gives us a
+  fast-iteration playtest tool (load a saved end-game state to validate
+  M4 changes against a populated world).
+- The smelter UI's panel layout uses the M2 shop pattern (Bevy `Node` +
+  `with_children` + per-button `BackgroundColor` toggle for enabled
+  state). It works but is verbose. M5 (conveyors) will spawn many more
+  panel-style entities — worth investigating a small UI helper crate or
+  in-house DSL if conveyor configuration UIs balloon.
+- The smelter's `update_smelter_panel_system` "always refresh" approach
+  (rebuilding label strings every frame while busy) is fine at our scale
+  but a known scaling tax. If M5 produces dozens of running machines,
+  consider gating per-machine refresh on the entity's `Changed<>` filter
+  individually.
+- Dig SFX/VFX remain unaddressed (carry-over from M1, M2 notes). Smelter
+  is also silent — finishing a bar should have audible feedback. Group
+  all audio into a single M7 polish task; not worth interleaving now.
+- The 23-system Update chain is at the high end of comfortable. M5 will
+  add at least conveyor-tick + per-conveyor render systems. Re-evaluate
+  whether `MachineSet` should split into `MachineUpdate` / `MachineUi`
+  sub-sets when that lands.
+
 ## What This Document Is Not
 
 - Not a spec. Specs live in `docs/superpowers/specs/` and are per-milestone.

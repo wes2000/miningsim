@@ -81,24 +81,40 @@ pub fn sync_shop_visibility_system(
 pub fn update_shop_labels_system(
     money: Res<Money>,
     owned: Res<OwnedTools>,
-    buttons_q: Query<(&ShopButtonKind, &Children)>,
+    buttons_q: Query<(&ShopButtonKind, &Children, Entity)>,
+    mut bg_q: Query<&mut BackgroundColor>,
     mut texts_q: Query<&mut Text>,
 ) {
     if !money.is_changed() && !owned.is_changed() { return; }
-    for (kind, children) in buttons_q.iter() {
+    for (kind, children, entity) in buttons_q.iter() {
         match kind {
-            ShopButtonKind::SellAll => { /* static label */ }
+            ShopButtonKind::SellAll => { /* static label, static color */ }
             ShopButtonKind::Buy(tool) => {
-                let new_label = if owned.0.contains(tool) {
+                let owned_already = owned.0.contains(tool);
+                let price = economy::tool_buy_price(*tool);
+                let affordable = money.0 >= price;
+
+                let new_label = if owned_already {
                     format!("{} - OWNED", current_tool_display_name(*tool))
                 } else {
-                    let price = economy::tool_buy_price(*tool);
                     format!("Buy {} - {}c", current_tool_display_name(*tool), price)
                 };
                 for c in children.iter() {
                     if let Ok(mut text) = texts_q.get_mut(*c) {
                         **text = new_label.clone();
                     }
+                }
+
+                // Background color signals interactability:
+                //   normal (affordable, not owned) — slightly lit
+                //   dimmed (broke or already owned) — darker
+                let new_bg = if owned_already || !affordable {
+                    Color::srgb(0.16, 0.16, 0.18)
+                } else {
+                    Color::srgb(0.22, 0.22, 0.28)
+                };
+                if let Ok(mut bg) = bg_q.get_mut(entity) {
+                    *bg = BackgroundColor(new_bg);
                 }
             }
         }

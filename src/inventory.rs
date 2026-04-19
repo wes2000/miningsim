@@ -1,23 +1,25 @@
 use std::collections::HashMap;
-use crate::grid::OreType;
+use bevy::prelude::Resource;
+use crate::items::ItemKind;
 
-#[derive(Debug, Default, bevy::prelude::Resource)]
+#[derive(Debug, Default, Resource)]
 pub struct Inventory {
-    counts: HashMap<OreType, u32>,
+    counts: HashMap<ItemKind, u32>,
 }
 
 impl Inventory {
-    pub fn add(&mut self, ore: OreType, n: u32) {
-        if ore == OreType::None { return; }
-        *self.counts.entry(ore).or_insert(0) += n;
+    pub fn add(&mut self, item: ItemKind, n: u32) {
+        if n == 0 { return; }
+        *self.counts.entry(item).or_insert(0) += n;
     }
 
-    pub fn remove(&mut self, ore: OreType, n: u32) {
-        let c = self.counts.entry(ore).or_insert(0);
-        *c = c.saturating_sub(n);
+    pub fn remove(&mut self, item: ItemKind, n: u32) {
+        if let Some(c) = self.counts.get_mut(&item) {
+            *c = c.saturating_sub(n);
+        }
     }
 
-    pub fn get(&self, ore: OreType) -> u32 {
-        *self.counts.get(&ore).unwrap_or(&0)
+    pub fn get(&self, item: ItemKind) -> u32 {
+        *self.counts.get(&item).unwrap_or(&0)
     }
 }

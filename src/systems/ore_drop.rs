@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use crate::components::{OreDrop, Player};
 use crate::inventory::Inventory;
-use crate::systems::setup::TILE_SIZE_PX;
+use crate::coords::TILE_SIZE_PX;
 
 pub const VACUUM_RADIUS_TILES: f32 = 1.0;
 pub const VACUUM_SPEED_PX_PER_S: f32 = 200.0;
@@ -21,7 +21,7 @@ pub fn ore_drop_system(
         let to_player = player_pos - t.translation.truncate();
         let dist = to_player.length();
         if dist < PICKUP_DISTANCE_PX {
-            inv.add(drop.ore, 1);
+            inv.add(drop.item, 1);
             commands.entity(entity).despawn();
             continue;
         }

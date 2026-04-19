@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::grid::OreType;
+use crate::items::{ItemKind, OreKind};
 use crate::tools::Tool;
 
 #[derive(Component)]
@@ -29,12 +29,12 @@ pub struct ChunkDirty;
 
 #[derive(Component)]
 pub struct OreSprite {
-    pub ore: OreType,
+    pub ore: OreKind,
 }
 
 #[derive(Component)]
 pub struct OreDrop {
-    pub ore: OreType,
+    pub item: ItemKind,
 }
 
 #[derive(Component)]
@@ -55,8 +55,35 @@ pub enum ShopButtonKind {
 #[derive(Component)]
 pub struct MoneyText;
 
+/// Marker on a tool-row label inside the inventory popup. Carries which Tool
+/// the row represents so the refresh system can look up owned/locked state
+/// per row without re-walking the children.
 #[derive(Component)]
-pub struct CurrentToolText;
+pub struct ToolRowText(pub Tool);
+
+#[derive(Component)]
+pub struct InventoryPopupRoot;
+
+#[derive(bevy::prelude::Resource, Default)]
+pub struct InventoryPopupOpen(pub bool);
 
 #[derive(bevy::prelude::Resource, Default)]
 pub struct ShopUiOpen(pub bool);
+
+#[derive(Component)]
+pub struct Smelter;
+
+#[derive(Component)]
+pub struct SmelterUiRoot;
+
+#[derive(Component)]
+pub enum SmelterButtonKind {
+    SmeltAll(OreKind),
+    CollectAll,
+}
+
+#[derive(Component)]
+pub struct SmelterStatusText;
+
+#[derive(bevy::prelude::Resource, Default)]
+pub struct SmelterUiOpen(pub bool);
