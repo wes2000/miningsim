@@ -71,7 +71,7 @@ pub struct OreSprite {
     pub ore: OreKind,
 }
 
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
 pub struct OreDrop {
     pub item: ItemKind,
 }

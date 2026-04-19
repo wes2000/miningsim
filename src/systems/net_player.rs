@@ -11,6 +11,10 @@
 //!                                       per-Player components that replication doesn't
 //!                                       carry (Sprite, Velocity, Facing).
 //!   * `sync_remote_player_visuals`    — paint sprites blue (local) / orange (remote).
+//!   * `add_shop_visuals_on_arrival`   — client-side; attach a Sprite to replicated Shop
+//!                                       entities (Sprite isn't carried by replicon).
+//!   * `add_smelter_visuals_on_arrival` — same, for Smelter.
+//!   * `add_ore_drop_visuals_on_arrival` — same, for OreDrop (per-item color).
 //!   * `mark_chunks_dirty_on_grid_change` — when Grid mutates (notably from a remote
 //!                                       host's dig replicating to a client), flag every
 //!                                       TerrainChunk so chunk_render rebuilds it.
@@ -253,6 +257,56 @@ pub fn sync_remote_player_visuals(
         if sprite.color != want {
             sprite.color = want;
         }
+    }
+}
+
+/// Replicon doesn't ship `Sprite` over the wire. When a Shop entity arrives
+/// via replication, attach the local visual. The `Without<Sprite>` filter
+/// keeps this no-op on the host (setup_world spawns Shop with a Sprite
+/// already attached).
+pub fn add_shop_visuals_on_arrival(
+    mut commands: Commands,
+    new_shops: Query<Entity, (Added<crate::components::Shop>, Without<Sprite>)>,
+) {
+    for e in new_shops.iter() {
+        commands.entity(e).insert(Sprite {
+            color: Color::srgb(0.95, 0.80, 0.20),
+            custom_size: Some(Vec2::splat(14.0)),
+            ..default()
+        });
+    }
+}
+
+/// Same as `add_shop_visuals_on_arrival`, for Smelter.
+pub fn add_smelter_visuals_on_arrival(
+    mut commands: Commands,
+    new_smelters: Query<Entity, (Added<crate::components::Smelter>, Without<Sprite>)>,
+) {
+    for e in new_smelters.iter() {
+        commands.entity(e).insert(Sprite {
+            color: Color::srgb(0.95, 0.50, 0.20),
+            custom_size: Some(Vec2::splat(14.0)),
+            ..default()
+        });
+    }
+}
+
+/// Same as `add_shop_visuals_on_arrival`, for OreDrop. Color depends on the
+/// item kind, matching what `dig_input_system` / `handle_dig_requests` apply
+/// at spawn time.
+pub fn add_ore_drop_visuals_on_arrival(
+    mut commands: Commands,
+    new_drops: Query<
+        (Entity, &crate::components::OreDrop),
+        (Added<crate::components::OreDrop>, Without<Sprite>),
+    >,
+) {
+    for (e, drop) in new_drops.iter() {
+        commands.entity(e).insert(Sprite {
+            color: crate::systems::hud::item_color(drop.item),
+            custom_size: Some(Vec2::splat(6.0)),
+            ..default()
+        });
     }
 }
 

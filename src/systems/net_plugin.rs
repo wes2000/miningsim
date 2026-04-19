@@ -37,6 +37,7 @@ impl Plugin for MultiplayerPlugin {
             .replicate::<Shop>()
             .replicate::<Smelter>()
             .replicate::<SmelterState>()
+            .replicate::<OreDrop>()
             .replicate::<Money>()
             .replicate::<Grid>()
             .replicate::<Inventory>()
@@ -84,6 +85,20 @@ impl Plugin for MultiplayerPlugin {
 
         // Visual sync (idempotent; cheap to always run).
         app.add_systems(Update, net_player::sync_remote_player_visuals);
+
+        // Client-side: Sprite isn't replicated by replicon, so when Shop /
+        // Smelter / OreDrop entities arrive on the client they need their
+        // visuals attached locally. The `Without<Sprite>` filter makes these
+        // safe to run unconditionally on the host (where setup_world /
+        // handle_dig_requests already attached Sprite at spawn time).
+        app.add_systems(
+            Update,
+            (
+                net_player::add_shop_visuals_on_arrival,
+                net_player::add_smelter_visuals_on_arrival,
+                net_player::add_ore_drop_visuals_on_arrival,
+            ),
+        );
 
         // Client-side: clean exit when the host drops. No-op (early-returns)
         // when `RenetClient` isn't present, so it's safe in host/single-player.
