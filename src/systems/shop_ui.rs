@@ -1,9 +1,10 @@
 use bevy::prelude::*;
-use crate::components::{ShopButtonKind, ShopUiOpen, ShopUiRoot};
+use crate::components::{LocalPlayer, ShopButtonKind, ShopUiOpen, ShopUiRoot};
 use crate::economy::{self, Money};
 use crate::inventory::Inventory;
 use crate::tools::{OwnedTools, Tool};
 use crate::systems::hud::current_tool_display_name;
+use crate::systems::net_events::{BuyToolRequest, SellAllRequest};
 
 pub fn spawn_shop_ui(mut commands: Commands) {
     commands
@@ -79,12 +80,12 @@ pub fn sync_shop_visibility_system(
 }
 
 pub fn update_shop_labels_system(
-    money: Res<Money>,
-    owned: Res<OwnedTools>,
+    local_player: Single<(Ref<Money>, Ref<OwnedTools>), With<LocalPlayer>>,
     buttons_q: Query<(&ShopButtonKind, &Children, Entity)>,
     mut bg_q: Query<&mut BackgroundColor>,
     mut texts_q: Query<&mut Text>,
 ) {
+    let (money, owned) = local_player.into_inner();
     if !money.is_changed() && !owned.is_changed() { return; }
     for (kind, children, entity) in buttons_q.iter() {
         match kind {
@@ -124,20 +125,37 @@ pub fn update_shop_labels_system(
 pub fn handle_shop_buttons_system(
     ui_open: Res<ShopUiOpen>,
     interaction_q: Query<(&Interaction, &ShopButtonKind), Changed<Interaction>>,
-    mut inv: ResMut<Inventory>,
-    mut money: ResMut<Money>,
-    mut owned: ResMut<OwnedTools>,
+    local_player: Option<Single<(&mut Money, &mut Inventory, &mut OwnedTools), With<LocalPlayer>>>,
+    net_mode: Res<crate::net::NetMode>,
+    mut sell_writer: EventWriter<SellAllRequest>,
+    mut buy_writer: EventWriter<BuyToolRequest>,
 ) {
     // Defense-in-depth: Bevy does not deliver Interaction events for hidden UI,
     // but guard here in case system ordering changes or the UI is force-hidden
     // mid-frame.
     if !ui_open.0 { return; }
+
+    if matches!(*net_mode, crate::net::NetMode::Client { .. }) {
+        // Client: fire request events for the host to validate; the local Money/
+        // Inventory/OwnedTools borrow is intentionally not acquired. UI labels
+        // refresh via Changed<…> when the host's mutations replicate back.
+        for (interaction, kind) in interaction_q.iter() {
+            if *interaction != Interaction::Pressed { continue; }
+            match kind {
+                ShopButtonKind::SellAll => { sell_writer.send(SellAllRequest); }
+                ShopButtonKind::Buy(tool) => { buy_writer.send(BuyToolRequest { tool: *tool }); }
+            }
+        }
+        return;
+    }
+
+    // SinglePlayer / Host: mutate the local player directly.
+    let Some(local_player) = local_player else { return };
+    let (mut money, mut inv, mut owned) = local_player.into_inner();
     for (interaction, kind) in interaction_q.iter() {
         if *interaction != Interaction::Pressed { continue; }
         match kind {
-            ShopButtonKind::SellAll => {
-                economy::sell_all(&mut inv, &mut money);
-            }
+            ShopButtonKind::SellAll => { economy::sell_all(&mut inv, &mut money); }
             ShopButtonKind::Buy(tool) => {
                 let _ = economy::try_buy(*tool, &mut money, &mut owned);
                 // BuyResult::Ok / NotEnoughMoney / AlreadyOwned handled silently;

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use crate::components::{
-    InventoryPopupOpen, InventoryPopupRoot, MoneyText, ToolRowText,
+    InventoryPopupOpen, InventoryPopupRoot, LocalPlayer, MoneyText, ToolRowText,
 };
 use crate::economy::Money;
 use crate::inventory::Inventory;
@@ -193,11 +193,11 @@ fn spawn_tool_row(parent: &mut ChildBuilder, tool: Tool) {
 
 /// Refreshes the top-right coin counter when Money changes.
 pub fn update_money_text_system(
-    money: Res<Money>,
-    mut q: Query<&mut Text, With<MoneyText>>,
+    money_q: Query<&Money, (With<LocalPlayer>, Changed<Money>)>,
+    mut text_q: Query<&mut Text, With<MoneyText>>,
 ) {
-    if !money.is_changed() { return; }
-    if let Ok(mut text) = q.get_single_mut() {
+    let Ok(money) = money_q.get_single() else { return };
+    if let Ok(mut text) = text_q.get_single_mut() {
         **text = format!("{}c", money.0);
     }
 }
@@ -205,11 +205,11 @@ pub fn update_money_text_system(
 /// Refreshes the popup's item counts when Inventory changes and the tools
 /// section when OwnedTools changes. Runs cheaply if neither did.
 pub fn update_inventory_popup_system(
-    inv: Res<Inventory>,
-    owned: Res<OwnedTools>,
+    local_player: Single<(Ref<Inventory>, Ref<OwnedTools>), With<LocalPlayer>>,
     mut item_q: Query<(&mut Text, &ItemCountText), Without<ToolRowText>>,
     mut tool_q: Query<(&mut Text, &ToolRowText), Without<ItemCountText>>,
 ) {
+    let (inv, owned) = local_player.into_inner();
     if inv.is_changed() {
         for (mut text, marker) in item_q.iter_mut() {
             **text = inv.get(marker.0).to_string();

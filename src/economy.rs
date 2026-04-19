@@ -1,11 +1,11 @@
-use bevy::prelude::Resource;
+use bevy::prelude::Component;
 use serde::{Deserialize, Serialize};
 
 use crate::inventory::Inventory;
 use crate::items::{ItemKind, OreKind, ALL_ITEMS};
 use crate::tools::{OwnedTools, Tool};
 
-#[derive(Debug, Default, Clone, Copy, Resource, Serialize, Deserialize)]
+#[derive(Component, Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct Money(pub u32);
 
 pub fn item_sell_price(item: ItemKind) -> u32 {

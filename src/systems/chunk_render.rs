@@ -17,11 +17,12 @@ fn layer_color(l: Layer) -> Color {
 
 pub fn chunk_remesh_system(
     mut commands: Commands,
-    grid: Option<Res<Grid>>,
+    grid: Option<Single<&Grid>>,
     dirty_q: Query<(Entity, &TerrainChunk), With<ChunkDirty>>,
     children_q: Query<&Children>,
 ) {
     let Some(grid) = grid else { return };
+    let grid = grid.into_inner();
     for (entity, chunk) in dirty_q.iter() {
         // despawn previous children (tile sprites + ore sprites)
         if let Ok(children) = children_q.get(entity) {

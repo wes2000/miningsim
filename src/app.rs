@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::systems::{camera, chunk_lifecycle, chunk_render, hud, ore_drop, player, save_load, setup, shop, shop_ui, smelter};
+use crate::systems::{camera, chunk_lifecycle, chunk_render, hud, ore_drop, player, setup, shop, shop_ui, smelter};
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum InputSet { ReadInput, ApplyInput }
@@ -23,7 +23,6 @@ impl Plugin for MiningSimPlugin {
                 hud::spawn_inventory_popup,
                 shop_ui::spawn_shop_ui,
                 smelter::spawn_smelter_ui,
-                save_load::startup_load_system,
             ).chain())
             // Order matches M2's chained-tuple invariant:
             //   input -> collide -> machine interactions/UI -> drops -> chunks -> hud -> save_load -> camera.
@@ -73,10 +72,18 @@ impl Plugin for MiningSimPlugin {
                 hud::update_inventory_popup_system.in_set(UiSet::Hud),
                 hud::toggle_inventory_popup_system.in_set(UiSet::Hud),
                 hud::sync_inventory_popup_visibility_system.in_set(UiSet::Hud),
-                save_load::save_hotkey_system.in_set(UiSet::SaveLoad),
-                save_load::load_hotkey_system.in_set(UiSet::SaveLoad),
-                save_load::auto_save_on_exit_system.in_set(UiSet::SaveLoad),
                 camera::camera_follow_system.in_set(UiSet::Camera),
             ));
+
+        // Mode-conditional plugin loading
+        let net_mode = app.world().resource::<crate::net::NetMode>().clone();
+        match net_mode {
+            crate::net::NetMode::SinglePlayer => {
+                app.add_plugins(crate::systems::save_load::SaveLoadPlugin);
+            }
+            crate::net::NetMode::Host { .. } | crate::net::NetMode::Client { .. } => {
+                app.add_plugins(crate::systems::net_plugin::MultiplayerPlugin);
+            }
+        }
     }
 }

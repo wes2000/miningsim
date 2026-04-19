@@ -1,5 +1,6 @@
 use bevy::prelude::*;
-use crate::components::{Facing, InventoryPopupOpen, MainCamera, Player, Shop, ShopUiOpen, Smelter, SmelterUiOpen, Velocity};
+use bevy_replicon::prelude::Replicated;
+use crate::components::{Facing, InventoryPopupOpen, LocalPlayer, MainCamera, NetOwner, Player, Shop, ShopUiOpen, Smelter, SmelterUiOpen, Velocity};
 use crate::coords::tile_center_world;
 use crate::economy::Money;
 use crate::inventory::Inventory;
@@ -17,26 +18,33 @@ pub fn setup_world(mut commands: Commands) {
     let sp = terrain_gen::spawn_tile(&grid);
     let player_world = tile_center_world(IVec2::new(sp.0, sp.1));
 
-    commands.insert_resource(grid);
-    commands.insert_resource(Inventory::default());
+    // Grid lives as a Component on a singleton entity so replicon can stream
+    // it to clients (Task 9.5). Replicated marker is a no-op in single-player.
+    commands.spawn((grid, Replicated));
     commands.insert_resource(crate::systems::player::DigCooldown::default());
-    commands.insert_resource(Money::default());
-    commands.insert_resource(OwnedTools::default());
     commands.insert_resource(ShopUiOpen::default());
     commands.insert_resource(SmelterUiOpen::default());
     commands.insert_resource(InventoryPopupOpen::default());
 
-    // Player
+    // Player. `NetOwner(HOST_NET_OWNER=u64::MAX)` + `Replicated` mark this as
+    // the host's player so remote clients see it as a peer (RemotePlayer-tagged
+    // sprite). Both are no-ops in single-player.
     commands.spawn((
         Player,
+        LocalPlayer,
+        NetOwner(crate::systems::net_player::HOST_NET_OWNER),
         Velocity::default(),
         Facing::default(),
+        Money::default(),
+        Inventory::default(),
+        OwnedTools::default(),
         Sprite {
             color: Color::srgb(0.30, 0.60, 0.90),
             custom_size: Some(Vec2::splat(12.0)),
             ..default()
         },
         Transform::from_translation(player_world.extend(10.0)),
+        Replicated,
     ));
 
     // Shop

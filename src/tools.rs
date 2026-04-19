@@ -1,10 +1,13 @@
-use std::collections::HashSet;
-use bevy::prelude::Resource;
+use std::collections::BTreeSet;
+use bevy::prelude::Component;
 use serde::{Deserialize, Serialize};
 
 use crate::grid::Layer;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+// Variant order is load-bearing: derived `Ord` drives BTreeSet iteration in
+// `OwnedTools.0`, replicated by bevy_replicon. Reordering changes diff output
+// and on-disk save shape — bump SAVE_VERSION if changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Tool {
     Shovel,
     Pickaxe,
@@ -39,12 +42,12 @@ pub fn clicks_required(tool: Tool, layer: Layer) -> Option<u8> {
     Some(3 - gap)
 }
 
-#[derive(Debug, Clone, Resource, Serialize, Deserialize)]
-pub struct OwnedTools(pub HashSet<Tool>);
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
+pub struct OwnedTools(pub BTreeSet<Tool>);
 
 impl Default for OwnedTools {
     fn default() -> Self {
-        let mut s = HashSet::new();
+        let mut s = BTreeSet::new();
         s.insert(Tool::Shovel);
         Self(s)
     }

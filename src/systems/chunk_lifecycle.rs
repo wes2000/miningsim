@@ -9,12 +9,13 @@ pub const CHUNK_MARGIN: i32 = 1;
 
 pub fn chunk_lifecycle_system(
     mut commands: Commands,
-    grid: Option<Res<Grid>>,
+    grid: Option<Single<&Grid>>,
     cam_q: Query<&Transform, With<MainCamera>>,
     win_q: Query<&Window, With<PrimaryWindow>>,
     chunks_q: Query<(Entity, &TerrainChunk)>,
 ) {
     let Some(grid) = grid else { return };
+    let grid = grid.into_inner();
     let Ok(cam) = cam_q.get_single() else { return };
     let Ok(win) = win_q.get_single() else { return };
 

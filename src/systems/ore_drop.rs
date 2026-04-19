@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::components::{OreDrop, Player};
+use crate::components::{LocalPlayer, OreDrop, Player};
 use crate::inventory::Inventory;
 use crate::coords::TILE_SIZE_PX;
 
@@ -12,10 +12,11 @@ pub fn ore_drop_system(
     time: Res<Time>,
     player_q: Query<&Transform, With<Player>>,
     mut drops_q: Query<(Entity, &OreDrop, &mut Transform), Without<Player>>,
-    mut inv: ResMut<Inventory>,
+    local_inv: Single<&mut Inventory, With<LocalPlayer>>,
 ) {
     let Ok(player_xf) = player_q.get_single() else { return };
     let player_pos = player_xf.translation.truncate();
+    let mut inv = local_inv.into_inner();
 
     for (entity, drop, mut t) in drops_q.iter_mut() {
         let to_player = player_pos - t.translation.truncate();

@@ -375,6 +375,134 @@ migration logic — by design for now).
   M4's "join failed" / "schema mismatch" / "host disconnected" error
   surface. Likely renamed to `WorldLoadError` and extended.
 
+## Playtest Results — Milestone 4 (2026-04-19)
+
+Exit-criteria met: 2-player direct-IP co-op via `bevy_replicon = "0.32"` +
+`bevy_replicon_renet = "0.9"`. Authoritative-host model. Per-player
+`Money`/`Inventory`/`OwnedTools` migrated from Resources to Components on
+the Player entity, with `LocalPlayer`/`RemotePlayer` markers driving HUD
+queries and sprite color (blue local, orange remote). Shared `Grid` and
+`SmelterState` replicate from host to clients. Smoke-tested four launch
+modes: `cargo run` (single-player + save/load), `cargo run -- host`,
+`cargo run -- join 127.0.0.1:5000`, and `cargo run -- garbage`
+(graceful fallback). Two-window co-op: movement, mining, ore drops,
+per-player coin/inv/tool state, shared smelter, shop. Host-disconnect →
+client logs error and emits `AppExit::Success` cleanly; client-disconnect
+→ host despawns the gone player and continues.
+
+`SAVE_VERSION` bumped 1 → 2 because internal collections moved from
+`HashMap`/`HashSet` (non-deterministic iteration) to `BTreeMap`/`BTreeSet`
+to satisfy replicon's diff-based replication. Old v1 saves are silently
+discarded on load. `OreKind`/`ItemKind`/`Tool` variant order is now
+load-bearing for replicated diff shape and is documented inline.
+
+Test count: **101 passing** (87 pre-M4 + 9 net.rs CLI parser + 5
+net_events serde round-trip).
+
+**What felt good:**
+- The phased structure (Phase A: Resource→Component refactor; Phase B:
+  CLI + plugin selection; Phase C: replicon integration) kept gameplay
+  playable after every Phase A commit. Smoke checkpoints after Tasks 4
+  and 6 caught a class of regressions that would otherwise have surfaced
+  only in the two-window test.
+- `Single<&T, With<LocalPlayer>>` is the right idiom for "the local
+  client's view of a per-player component." HUD/shop/smelter UI
+  consumers all use it identically; the same code path serves
+  single-player, host-mode-with-no-clients, and host-mode-with-clients
+  without further branching.
+- The `OwningClient(Entity)` (server-side only) + `NetOwner(u64)`
+  (replicated) split was the correct response to replicon 0.32's "no
+  `ClientId` type" reality. `OwningClient` carries a host-side `Entity`
+  for request routing; `NetOwner` carries a renet `client_id` that
+  survives wire serialization for client-side "is this Player mine?"
+  identification.
+- Branching the UI handlers on `NetMode::Client` (NOT
+  `Host | Client`) keeps the host's path identical to single-player —
+  the host has no `OwningClient` on its own Player, so its events would
+  be silently dropped by `handle_*_requests`. Mutating directly avoids
+  that and avoids a wasted serialization round-trip for the host's
+  own actions.
+- Pure modules (`grid`, `dig`, `economy`, `inventory`, `tools`,
+  `processing`, `coords`, `save`, `net`, `net_events`) all stayed
+  Bevy-system-free. Networking lives entirely in `systems/net_plugin.rs`
+  and `systems/net_player.rs`. Pure-data tests still cover the
+  authoritative gameplay logic — replicon just routes who calls them.
+
+**What felt off (and was fixed mid-flight):**
+- Plan pinned `bevy_replicon = "0.30"` + `bevy_replicon_renet = "0.5"`,
+  but `0.5.x` of the transport adapter hard-depends on `bevy = "0.14"`
+  and silently dragged a second copy of bevy into the build graph.
+  Diagnosed via `cargo tree -i bevy`. Corrected to `0.32` + `0.9` and
+  documented the verification command in the plan's resolved
+  open-questions section so the next reader can avoid the same trap.
+- The plan punted on `Grid` replication ("if replicon doesn't support
+  resource replication, that's a small additional refactor"). The
+  refactor was not small — `Grid` has six consumer files. We inserted
+  Task 9.5 (Grid Resource → Component on a singleton entity with
+  `Replicated` marker) between Tasks 9 and 10. Without it, host's dig
+  mutations would not visually propagate to client peers. Replicon now
+  ships a full Grid snapshot on every change (~16 KB at 80×200);
+  documented as the bandwidth budget to revisit if the map grows.
+- Task 10 attempted to treat `OwningClient(ClientId)` as a replicated
+  marker for client-side player identification. Replicon 0.32 doesn't
+  expose a `ClientId` type — connected clients are entities with a
+  replicon-side `ConnectedClient` component. Task 12's implementer
+  correctly split into `OwningClient(Entity)` (server-only routing) and
+  `NetOwner(u64)` (replicated identification carrying the renet
+  `client_id`).
+- First Task 12 build of `start_net_mode_system` used
+  `ConnectionConfig::default()`, which declares zero channels. Replicon
+  needs the channels its registered components and events use; the
+  default would have caused all replicated state to silently drop.
+  Caught in code review before smoke test #3, fixed by deriving the
+  config from `Res<RepliconChannels>` via
+  `bevy_replicon_renet::RenetChannelsExt`.
+- `HOST_NET_OWNER` was initially `0`, which would collide with any
+  client whose renet `client_id` happened to be `0`. Switched to
+  `u64::MAX` (well above the millis-derived range).
+
+**What we deliberately deferred:**
+- `Cargo.lock` is still gitignored. Convention for binary crates is to
+  commit it; deferred per user call. Adds risk that multi-machine
+  builds resolve different patch versions of replicon/renet.
+- New joiners spawn at world `(0, 0)` rather than the host's spawn-tile
+  helper. Visually fine but possibly inside terrain — they may need to
+  dig out before being visible. Trivial to fix when the UX matters.
+- The `Display` impl on `CliParseError` was never added — `main.rs`
+  uses `{:?}` for the fallback error message. Output is readable
+  (`UnknownCommand("garbage")`) but not user-facing-polished.
+
+**Decisions for the next milestone:**
+- **The bones are online-friendly.** `bevy_replicon` + `renet` are real
+  UDP networking, not local-only. The 2-player cap is a config line in
+  `setup_host` (`max_clients`); per-player components scale to N
+  cleanly; the smelter UI/shop/HUD all already filter on
+  `With<LocalPlayer>` so they automatically scale. The path to
+  friction-free internet co-op is to swap `bevy_replicon_renet` for
+  `bevy_replicon_steam` (Steam relay + lobbies + auth) or stand up a
+  dedicated server with `bevy_replicon_quinnet`. The replicon API
+  surface stays identical.
+- **Trust model is pragmatic for friends, fragile for strangers.** Dig
+  is server-validated (reach, line-of-sight, tool-tier). Buy/sell are
+  host-mediated. Shared smelter is intentionally trust-based per the
+  M4 spec — anyone can collect anyone's deposit. Acceptable for friend
+  groups; would need per-deposit ownership tracking for stranger play.
+- **Grid replication will not scale.** Full-snapshot replication is
+  fine at 80×200 (~16 KB). At 200×500 (~100 KB) the per-frame
+  bandwidth on dig-storms will become noticeable. The replacement is
+  delta encoding (per-tile change events with `add_server_event`).
+  Not blocking M5; flag for M6+.
+- **Host-vs-client UI parity is a quiet win.** The same handler code
+  serves both modes in single-player and Host (LocalPlayer mutation
+  path). Only Client mode goes through the event system. Future UI
+  systems can follow the same pattern without re-deriving the
+  branching logic.
+- **`OwningClient` + `NetOwner` is unusual but correct.** Document
+  this pattern explicitly in CLAUDE.md or a short architecture note
+  before M5 — the split would be easy for a future contributor to
+  collapse into one component, breaking either server routing or
+  client identification.
+
 ## What This Document Is Not
 
 - Not a spec. Specs live in `docs/superpowers/specs/` and are per-milestone.

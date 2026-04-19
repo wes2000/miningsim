@@ -7,6 +7,7 @@ use crate::grid::Grid;
 use crate::items::ItemKind;
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
 use crate::systems::hud::item_color;
+use crate::systems::net_events::DigRequest;
 
 #[derive(Resource)]
 pub struct DigCooldown(pub Timer);
@@ -66,10 +67,11 @@ pub fn apply_velocity_system(
 }
 
 pub fn collide_player_with_grid_system(
-    grid: Option<Res<Grid>>,
+    grid: Option<Single<&Grid>>,
     mut q: Query<&mut Transform, With<Player>>,
 ) {
     let Some(grid) = grid else { return };
+    let grid = grid.into_inner();
     let Ok(mut t) = q.get_single_mut() else { return };
 
     // Resolve X then Y. Player AABB is [pos.xy ± PLAYER_HALF].
@@ -128,13 +130,16 @@ pub fn dig_input_system(
     win_q: Query<&Window, With<PrimaryWindow>>,
     cam_q: Query<(&Camera, &GlobalTransform), With<crate::components::MainCamera>>,
     player_q: Query<(&Transform, &Facing), With<Player>>,
-    mut grid: ResMut<Grid>,
+    grid: Single<&mut Grid>,
     mut cooldown: ResMut<DigCooldown>,
     chunks_q: Query<(Entity, &TerrainChunk)>,
-    owned_tools: Res<crate::tools::OwnedTools>,
+    owned_tools: Single<&crate::tools::OwnedTools, With<crate::components::LocalPlayer>>,
     time: Res<Time>,
+    net_mode: Res<crate::net::NetMode>,
+    mut dig_writer: EventWriter<DigRequest>,
 ) {
     cooldown.0.tick(time.delta());
+    let mut grid = grid.into_inner();
 
     // Two trigger paths. Mouse wins if both are held (more specific aim).
     let mouse_held = mouse.pressed(MouseButton::Left);
@@ -167,10 +172,16 @@ pub fn dig_input_system(
 
     // Look up tile layer to pick the best tool.
     let Some(tile) = grid.get(target_tile.x, target_tile.y).copied() else { return; };
-    let Some(tool) = crate::tools::best_applicable_tool(&owned_tools, tile.layer) else {
+    let Some(tool) = crate::tools::best_applicable_tool(*owned_tools, tile.layer) else {
         // Player owns nothing that can break this layer. Clunk; no cooldown reset.
         return;
     };
+
+    if matches!(*net_mode, crate::net::NetMode::Client { .. }) {
+        dig_writer.send(DigRequest { target: target_tile });
+        cooldown.0.reset();
+        return;
+    }
 
     let result = dig::try_dig(&mut grid, target_tile, tool);
     match result.status {

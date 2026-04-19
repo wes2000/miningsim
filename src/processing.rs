@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use bevy::prelude::Component;
 use serde::{Deserialize, Serialize};
 use crate::items::OreKind;
@@ -10,7 +10,7 @@ pub struct SmelterState {
     pub recipe: Option<OreKind>,
     pub time_left: f32,
     pub queue: u32,
-    pub output: HashMap<OreKind, u32>,
+    pub output: BTreeMap<OreKind, u32>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -52,6 +52,6 @@ pub fn tick_smelter(state: &mut SmelterState, dt: f32) -> SmeltTickEvent {
     SmeltTickEvent::BarFinished(ore)
 }
 
-pub fn collect_output(state: &mut SmelterState) -> HashMap<OreKind, u32> {
+pub fn collect_output(state: &mut SmelterState) -> BTreeMap<OreKind, u32> {
     std::mem::take(&mut state.output)
 }

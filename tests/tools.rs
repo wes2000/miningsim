@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use miningsim::grid::Layer;
 use miningsim::tools::{self, Tool, OwnedTools};
 
@@ -63,7 +63,7 @@ fn default_owned_tools_has_only_shovel() {
 
 #[test]
 fn best_applicable_tool_picks_strongest() {
-    let owned = OwnedTools(HashSet::from([Tool::Shovel, Tool::Pickaxe, Tool::Jackhammer]));
+    let owned = OwnedTools(BTreeSet::from([Tool::Shovel, Tool::Pickaxe, Tool::Jackhammer]));
     assert_eq!(tools::best_applicable_tool(&owned, Layer::Dirt), Some(Tool::Jackhammer));
     assert_eq!(tools::best_applicable_tool(&owned, Layer::Stone), Some(Tool::Jackhammer));
     assert_eq!(tools::best_applicable_tool(&owned, Layer::Deep), Some(Tool::Jackhammer));
@@ -71,7 +71,7 @@ fn best_applicable_tool_picks_strongest() {
 
 #[test]
 fn best_applicable_tool_returns_none_when_no_owned_tool_can_break() {
-    let owned = OwnedTools(HashSet::from([Tool::Shovel]));
+    let owned = OwnedTools(BTreeSet::from([Tool::Shovel]));
     assert_eq!(tools::best_applicable_tool(&owned, Layer::Stone), None);
     assert_eq!(tools::best_applicable_tool(&owned, Layer::Core), None);
     assert_eq!(tools::best_applicable_tool(&owned, Layer::Bedrock), None);
