@@ -7,3 +7,4 @@ pub mod player;
 pub mod setup;
 pub mod shop;
 pub mod shop_ui;
+pub mod smelter;
