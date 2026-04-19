@@ -55,8 +55,17 @@ pub enum ShopButtonKind {
 #[derive(Component)]
 pub struct MoneyText;
 
+/// Marker on a tool-row label inside the inventory popup. Carries which Tool
+/// the row represents so the refresh system can look up owned/locked state
+/// per row without re-walking the children.
 #[derive(Component)]
-pub struct CurrentToolText;
+pub struct ToolRowText(pub Tool);
+
+#[derive(Component)]
+pub struct InventoryPopupRoot;
+
+#[derive(bevy::prelude::Resource, Default)]
+pub struct InventoryPopupOpen(pub bool);
 
 #[derive(bevy::prelude::Resource, Default)]
 pub struct ShopUiOpen(pub bool);

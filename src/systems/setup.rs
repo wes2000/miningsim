@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::components::{Facing, MainCamera, Player, Shop, ShopUiOpen, Velocity};
+use crate::components::{Facing, InventoryPopupOpen, MainCamera, Player, Shop, ShopUiOpen, Velocity};
 use crate::coords::tile_center_world;
 use crate::economy::Money;
 use crate::inventory::Inventory;
@@ -22,6 +22,7 @@ pub fn setup_world(mut commands: Commands) {
     commands.insert_resource(Money::default());
     commands.insert_resource(OwnedTools::default());
     commands.insert_resource(ShopUiOpen::default());
+    commands.insert_resource(InventoryPopupOpen::default());
 
     // Player
     commands.spawn((
