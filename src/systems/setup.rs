@@ -26,8 +26,8 @@ pub fn setup_world(mut commands: Commands) {
     commands.insert_resource(SmelterUiOpen::default());
     commands.insert_resource(InventoryPopupOpen::default());
 
-    // Player. `NetOwner(HOST_NET_OWNER=0)` + `Replicated` mark this as the
-    // host's player so remote clients see it as a peer (RemotePlayer-tagged
+    // Player. `NetOwner(HOST_NET_OWNER=u64::MAX)` + `Replicated` mark this as
+    // the host's player so remote clients see it as a peer (RemotePlayer-tagged
     // sprite). Both are no-ops in single-player.
     commands.spawn((
         Player,

@@ -31,6 +31,7 @@ use bevy_replicon_renet::netcode::{
     ServerConfig,
 };
 use bevy_replicon_renet::renet::{ConnectionConfig, RenetClient, RenetServer};
+use bevy_replicon_renet::RenetChannelsExt;
 
 use crate::components::{
     ChunkDirty, Facing, LocalClientId, LocalPlayer, NetOwner, OwningClient, Player, RemotePlayer,
@@ -50,29 +51,48 @@ const REMOTE_PLAYER_COLOR: Color = Color::srgb(0.95, 0.55, 0.20);
 const PLAYER_SPRITE_SIZE: f32 = 12.0;
 
 /// Reserved "client_id" value used for the host's own local Player. Real renet
-/// client IDs are `as_millis() as u64` and won't collide with this in practice.
-pub const HOST_NET_OWNER: u64 = 0;
+/// client IDs are `as_millis() as u64`; `u64::MAX` is well above the
+/// millis-based range and won't collide with any real client_id (a 0 sentinel
+/// would mis-tag the host's player as local on a client whose `as_millis()`
+/// happened to return 0, or on a tester that passed 0 explicitly).
+pub const HOST_NET_OWNER: u64 = u64::MAX;
 
 /// Transport setup. Runs once at Startup. NetMode::SinglePlayer is a no-op
 /// (the MultiplayerPlugin isn't even loaded in that case, but be defensive).
-pub fn start_net_mode_system(mut commands: Commands, net_mode: Res<NetMode>) {
+pub fn start_net_mode_system(
+    mut commands: Commands,
+    net_mode: Res<NetMode>,
+    channels: Res<RepliconChannels>,
+) {
     match net_mode.clone() {
         NetMode::SinglePlayer => {}
         NetMode::Host { port } => {
-            if let Err(e) = setup_host(&mut commands, port) {
+            if let Err(e) = setup_host(&mut commands, &channels, port) {
                 error!("failed to start host on port {port}: {e}");
             }
         }
         NetMode::Client { addr } => {
-            if let Err(e) = setup_client(&mut commands, addr) {
+            if let Err(e) = setup_client(&mut commands, &channels, addr) {
                 error!("failed to connect client to {addr}: {e}");
             }
         }
     }
 }
 
-fn setup_host(commands: &mut Commands, port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    let server = RenetServer::new(ConnectionConfig::default());
+fn setup_host(
+    commands: &mut Commands,
+    channels: &RepliconChannels,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // ConnectionConfig must declare channels matching what replicon registered
+    // (one per replicated component + one per client/server event). The
+    // default is empty, which silently drops all replicated state and events.
+    let connection_config = ConnectionConfig {
+        server_channels_config: channels.server_configs(),
+        client_channels_config: channels.client_configs(),
+        ..Default::default()
+    };
+    let server = RenetServer::new(connection_config);
     let public_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
     let socket = UdpSocket::bind(public_addr)?;
     let current_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
@@ -90,8 +110,18 @@ fn setup_host(commands: &mut Commands, port: u16) -> Result<(), Box<dyn std::err
     Ok(())
 }
 
-fn setup_client(commands: &mut Commands, server_addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-    let client = RenetClient::new(ConnectionConfig::default());
+fn setup_client(
+    commands: &mut Commands,
+    channels: &RepliconChannels,
+    server_addr: SocketAddr,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // See `setup_host` — channels must match what replicon registered.
+    let connection_config = ConnectionConfig {
+        server_channels_config: channels.server_configs(),
+        client_channels_config: channels.client_configs(),
+        ..Default::default()
+    };
+    let client = RenetClient::new(connection_config);
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
     let current_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
     // Client ID derives from current time: cheap unique ID for casual co-op.

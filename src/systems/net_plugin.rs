@@ -84,10 +84,14 @@ impl Plugin for MultiplayerPlugin {
         app.add_systems(Update, net_player::sync_remote_player_visuals);
 
         // When the singleton Grid changes via replication, re-mesh chunks.
-        // Runs on host AND client — host's chunks are already kept dirty by
-        // `handle_dig_requests`'s targeted insert, but a global re-dirty here
-        // is harmless (chunk_render is idempotent).
-        app.add_systems(Update, net_player::mark_chunks_dirty_on_grid_change);
+        // Client-only: on the host, `handle_dig_requests` already targets the
+        // specific chunk that changed, so a global re-dirty here is wasteful
+        // (every chunk re-meshed on every dig). Clients have no other
+        // re-mesh trigger for replicated Grid mutations, so we need it there.
+        app.add_systems(
+            Update,
+            net_player::mark_chunks_dirty_on_grid_change.run_if(client_connected),
+        );
     }
 }
 
