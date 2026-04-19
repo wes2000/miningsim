@@ -243,6 +243,33 @@ pub fn sync_remote_player_visuals(
     }
 }
 
+/// Client-side: detect host disconnect and exit the app cleanly.
+///
+/// Polls the renet client connection state each frame. When it transitions
+/// from connected to disconnected (host closed window, crashed, network
+/// dropped), log the reason and emit `AppExit::Success`. The `Local<bool>`
+/// latch prevents spamming the log + exit event during the (possibly several)
+/// frames between `is_disconnected()` becoming true and the app actually
+/// exiting.
+///
+/// No-op when `RenetClient` isn't present (single-player or host mode), so
+/// this can be registered unconditionally on the MultiplayerPlugin.
+pub fn exit_on_host_disconnect(
+    client: Option<Res<RenetClient>>,
+    mut exit: EventWriter<AppExit>,
+    mut already_logged: Local<bool>,
+) {
+    let Some(client) = client else { return };
+    if client.is_disconnected() && !*already_logged {
+        match client.disconnect_reason() {
+            Some(reason) => error!("disconnected from host: {:?}", reason),
+            None => error!("disconnected from host (no reason given)"),
+        }
+        exit.send(AppExit::Success);
+        *already_logged = true;
+    }
+}
+
 /// When the singleton Grid changes (typically because the host's dig
 /// replicated to us as a client), flag every TerrainChunk dirty so
 /// chunk_render rebuilds them. On the host this also fires after local digs,

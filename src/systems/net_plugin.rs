@@ -83,6 +83,12 @@ impl Plugin for MultiplayerPlugin {
         // Visual sync (idempotent; cheap to always run).
         app.add_systems(Update, net_player::sync_remote_player_visuals);
 
+        // Client-side: clean exit when the host drops. No-op (early-returns)
+        // when `RenetClient` isn't present, so it's safe in host/single-player.
+        // NOT gated on `client_connected` — the whole point is to fire when
+        // the connection is lost.
+        app.add_systems(Update, net_player::exit_on_host_disconnect);
+
         // When the singleton Grid changes via replication, re-mesh chunks.
         // Client-only: on the host, `handle_dig_requests` already targets the
         // specific chunk that changed, so a global re-dirty here is wasteful
