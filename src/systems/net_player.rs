@@ -369,3 +369,60 @@ pub fn mark_chunks_dirty_on_grid_change(
         commands.entity(chunk).insert(ChunkDirty);
     }
 }
+
+/// Client-side: receives the one-shot `GridSnapshot` sent by the host on
+/// connection. Spawns the Grid singleton entity locally and marks every
+/// existing TerrainChunk dirty so `chunk_render` rebuilds meshes from the
+/// newly-available grid. Replaces any prior Grid singleton defensively
+/// (shouldn't happen on the first snapshot, but handles the weird case
+/// where a second snapshot arrives).
+pub fn apply_grid_snapshot(
+    mut commands: Commands,
+    mut events: EventReader<crate::systems::net_events::GridSnapshot>,
+    existing_grid: Query<Entity, With<crate::grid::Grid>>,
+    chunks: Query<Entity, With<TerrainChunk>>,
+) {
+    for event in events.read() {
+        info!("applying grid snapshot ({}x{})", event.grid.width(), event.grid.height());
+        // Defensive: remove any existing Grid entity first.
+        for e in existing_grid.iter() {
+            commands.entity(e).despawn();
+        }
+        // Spawn fresh Grid singleton. No Replicated marker — client-local.
+        commands.spawn(event.grid.clone());
+        // Dirty every chunk so they re-mesh on the next chunk_render pass.
+        for chunk in chunks.iter() {
+            commands.entity(chunk).insert(ChunkDirty);
+        }
+    }
+}
+
+/// Client-side: applies a single-tile delta from the host. Early-returns if
+/// the Grid singleton doesn't exist yet (pre-snapshot race window); any lost
+/// pre-snapshot events are already reflected in the snapshot that's arriving.
+pub fn apply_tile_changed(
+    mut commands: Commands,
+    mut events: EventReader<crate::systems::net_events::TileChanged>,
+    mut grid_q: Query<&mut crate::grid::Grid>,
+    chunks_q: Query<(Entity, &TerrainChunk)>,
+) {
+    let Ok(mut grid) = grid_q.get_single_mut() else {
+        // No Grid yet — drain and drop. Snapshot will supersede.
+        events.clear();
+        return;
+    };
+    for event in events.read() {
+        grid.set(event.pos.x, event.pos.y, event.tile);
+        // Dirty only the owning chunk.
+        let chunk_coord = IVec2::new(
+            event.pos.x.div_euclid(crate::systems::chunk_lifecycle::CHUNK_TILES),
+            event.pos.y.div_euclid(crate::systems::chunk_lifecycle::CHUNK_TILES),
+        );
+        for (e, c) in chunks_q.iter() {
+            if c.coord == chunk_coord {
+                commands.entity(e).insert(ChunkDirty);
+                break;
+            }
+        }
+    }
+}

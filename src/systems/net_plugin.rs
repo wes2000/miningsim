@@ -106,6 +106,17 @@ impl Plugin for MultiplayerPlugin {
             ),
         );
 
+        // M5b: client-side grid sync from server events.
+        app.add_systems(
+            Update,
+            (
+                net_player::apply_grid_snapshot,
+                net_player::apply_tile_changed,
+            )
+                .chain()
+                .run_if(client_connected),
+        );
+
         // Client-side: clean exit when the host drops. No-op (early-returns)
         // when `RenetClient` isn't present, so it's safe in host/single-player.
         // NOT gated on `client_connected` — the whole point is to fire when
