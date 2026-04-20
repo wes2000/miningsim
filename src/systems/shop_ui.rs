@@ -36,10 +36,11 @@ pub fn spawn_shop_ui(mut commands: Commands) {
                 Text::new("Tools:"),
                 TextFont { font_size: 18.0, ..default() },
             ));
-            // Buy Pickaxe / Jackhammer / Dynamite
+            // Buy Pickaxe / Jackhammer / Dynamite / Belt Networks
             spawn_buy_row(panel, Tool::Pickaxe);
             spawn_buy_row(panel, Tool::Jackhammer);
             spawn_buy_row(panel, Tool::Dynamite);
+            spawn_buy_row(panel, Tool::BeltUnlock);
         });
 }
 

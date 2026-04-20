@@ -25,6 +25,7 @@ pub fn tool_buy_price(tool: Tool) -> u32 {
         Tool::Pickaxe => 30,
         Tool::Jackhammer => 100,
         Tool::Dynamite => 300,
+        Tool::BeltUnlock => 200,
     }
 }
 
