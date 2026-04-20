@@ -15,9 +15,15 @@
 //!                                       entities (Sprite isn't carried by replicon).
 //!   * `add_smelter_visuals_on_arrival` — same, for Smelter.
 //!   * `add_ore_drop_visuals_on_arrival` — same, for OreDrop (per-item color).
-//!   * `mark_chunks_dirty_on_grid_change` — when Grid mutates (notably from a remote
-//!                                       host's dig replicating to a client), flag every
-//!                                       TerrainChunk so chunk_render rebuilds it.
+//!   * `apply_grid_snapshot`           — client-side; apply a one-shot GridSnapshot from
+//!                                       the host, replacing the local Grid singleton.
+//!   * `apply_tile_changed`            — client-side; apply incremental TileChanged deltas;
+//!                                       early-returns if the Grid doesn't exist yet.
+//!   * `send_local_position_system`    — client-side; 10 Hz send of LocalPlayer position
+//!                                       to the host via `ClientPositionUpdate`.
+//!   * `restore_local_transform_from_authoritative` — client-side; undo any inbound
+//!                                       Transform replication for LocalPlayer by
+//!                                       restoring from the local `AuthoritativeTransform`.
 //!   * `exit_on_host_disconnect`       — client-side; log + emit `AppExit` when the
 //!                                       host drops the connection.
 //!
@@ -41,13 +47,14 @@ use bevy_replicon_renet::renet::{ConnectionConfig, RenetClient, RenetServer};
 use bevy_replicon_renet::RenetChannelsExt;
 
 use crate::components::{
-    ChunkDirty, Facing, LocalClientId, LocalPlayer, NetOwner, OwningClient, Player, RemotePlayer,
-    TerrainChunk, Velocity,
+    AuthoritativeTransform, ChunkDirty, Facing, LocalClientId, LocalPlayer, NetOwner, OwningClient,
+    Player, RemotePlayer, TerrainChunk, Velocity,
 };
 use crate::economy::Money;
 use crate::grid::Grid;
 use crate::inventory::Inventory;
 use crate::net::NetMode;
+use crate::systems::net_events::{ClientPositionUpdate, GridSnapshot, TileChanged};
 use crate::tools::OwnedTools;
 
 /// Arbitrary game identifier — both ends MUST agree. ASCII "MINING_1".
@@ -63,6 +70,23 @@ const PLAYER_SPRITE_SIZE: f32 = 12.0;
 /// would mis-tag the host's player as local on a client whose `as_millis()`
 /// happened to return 0, or on a tester that passed 0 explicitly).
 pub const HOST_NET_OWNER: u64 = u64::MAX;
+
+/// How often the client ships its authoritative position to the host.
+/// 10 Hz = one packet every 100 ms. At max player speed (120 px/s) that's
+/// ~12 px = <1 tile of position staleness on the host side — well within
+/// `DIG_REACH_TILES = 2.0`'s slack.
+pub const POSITION_SYNC_HZ: f32 = 10.0;
+
+/// Timer driving `send_local_position_system`. Inserted unconditionally in
+/// `MultiplayerPlugin::build`; the system itself no-ops in non-Client modes.
+#[derive(Resource)]
+pub struct LocalPositionSyncTimer(pub Timer);
+
+impl Default for LocalPositionSyncTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(1.0 / POSITION_SYNC_HZ, TimerMode::Repeating))
+    }
+}
 
 /// Transport setup. Runs once at Startup. NetMode::SinglePlayer is a no-op
 /// (the MultiplayerPlugin isn't even loaded in that case, but be defensive).
@@ -183,13 +207,26 @@ pub fn spawn_player_for_new_clients(
         })
         .unwrap_or(Vec2::ZERO);
     info!("spawning player for connected client `{client_entity}` (network_id {net_owner})");
+    // Add host-local `RemotePlayer` tag + `Sprite` so the host window actually
+    // renders the joining player. Neither is replicated (they're not in the
+    // `.replicate::<T>()` chain, and Sprite isn't replicon-serializable
+    // anyway), so they stay local to the host. The client's arrival of this
+    // entity triggers its own `mark_local_player_on_arrival` which attaches
+    // its own Sprite + RemotePlayer tag client-side.
     commands.spawn((
         Player,
+        RemotePlayer,
         OwningClient(client_entity),
         NetOwner(net_owner),
+        Facing::default(),
         Money::default(),
         Inventory::default(),
         OwnedTools::default(),
+        Sprite {
+            color: REMOTE_PLAYER_COLOR,
+            custom_size: Some(Vec2::splat(PLAYER_SPRITE_SIZE)),
+            ..default()
+        },
         Transform::from_translation(spawn_world.extend(10.0)),
         Replicated,
     ));
@@ -216,12 +253,12 @@ pub fn mark_local_player_on_arrival(
     mut commands: Commands,
     local_id: Option<Res<LocalClientId>>,
     arriving: Query<
-        (Entity, &NetOwner),
+        (Entity, &NetOwner, &Transform),
         (With<Player>, Without<LocalPlayer>, Without<RemotePlayer>),
     >,
 ) {
     let Some(local_id) = local_id else { return };
-    for (entity, owner) in &arriving {
+    for (entity, owner, xf) in &arriving {
         let is_local = owner.0 == local_id.0;
         let mut ec = commands.entity(entity);
         if is_local {
@@ -229,6 +266,7 @@ pub fn mark_local_player_on_arrival(
                 LocalPlayer,
                 Velocity::default(),
                 Facing::default(),
+                AuthoritativeTransform(xf.translation),   // seed from server spawn
                 Sprite {
                     color: LOCAL_PLAYER_COLOR,
                     custom_size: Some(Vec2::splat(PLAYER_SPRITE_SIZE)),
@@ -319,6 +357,37 @@ pub fn add_ore_drop_visuals_on_arrival(
     }
 }
 
+/// Replicon doesn't ship `Sprite` or the derived `BeltVisual` over the wire.
+/// Attach both locally when a BeltTile entity arrives via replication. The
+/// `Without<Sprite>` filter keeps this a no-op on the host (local placements
+/// spawn with Sprite already attached).
+pub fn add_belt_visuals_on_arrival(
+    mut commands: Commands,
+    new_belts: Query<(Entity, &crate::belt::BeltTile), (Added<crate::belt::BeltTile>, Without<Sprite>)>,
+) {
+    for (e, bt) in new_belts.iter() {
+        let color = belt_color_for_dir(bt.dir);
+        commands.entity(e).insert((
+            Sprite {
+                color,
+                custom_size: Some(Vec2::splat(crate::coords::TILE_SIZE_PX)),
+                ..default()
+            },
+            crate::belt::BeltVisual::Straight,
+        ));
+    }
+}
+
+fn belt_color_for_dir(dir: crate::belt::BeltDir) -> Color {
+    use crate::belt::BeltDir;
+    match dir {
+        BeltDir::North => Color::srgb(0.20, 0.55, 0.20),
+        BeltDir::East  => Color::srgb(0.60, 0.55, 0.20),
+        BeltDir::South => Color::srgb(0.55, 0.20, 0.20),
+        BeltDir::West  => Color::srgb(0.20, 0.20, 0.55),
+    }
+}
+
 /// Client-side: detect host disconnect and exit the app cleanly.
 ///
 /// Polls the renet client connection state each frame. When it transitions
@@ -346,26 +415,109 @@ pub fn exit_on_host_disconnect(
     }
 }
 
-/// When the singleton Grid changes (typically because the host's dig
-/// replicated to us as a client), flag every TerrainChunk dirty so
-/// chunk_render rebuilds them. On the host this also fires after local digs,
-/// but those tiles are already covered by the per-chunk dirtying inside
-/// `handle_dig_requests`/local dig — re-dirtying them is harmless (the chunk
-/// renderer is idempotent).
-// SCALING: re-meshes ALL chunks on every Grid change. Acceptable at 80x200
-// (~25 chunks), painful at 200x500. Future fix: switch to per-tile delta
-// events via `add_server_event` so clients can mark only the affected chunk
-// dirty instead of dirtying the world.
-pub fn mark_chunks_dirty_on_grid_change(
-    grid_q: Query<Ref<Grid>>,
-    chunks: Query<Entity, With<TerrainChunk>>,
+/// Client-side: receives the one-shot `GridSnapshot` sent by the host on
+/// connection. Spawns the Grid singleton entity locally and marks every
+/// existing TerrainChunk dirty so `chunk_render` rebuilds meshes from the
+/// newly-available grid. Replaces any prior Grid singleton defensively
+/// (shouldn't happen on the first snapshot, but handles the weird case
+/// where a second snapshot arrives).
+pub fn apply_grid_snapshot(
     mut commands: Commands,
+    mut events: EventReader<GridSnapshot>,
+    existing_grid: Query<Entity, With<Grid>>,
+    chunks: Query<Entity, With<TerrainChunk>>,
 ) {
-    let Ok(grid) = grid_q.get_single() else { return };
-    if !grid.is_changed() {
+    for event in events.read() {
+        info!("applying grid snapshot ({}x{})", event.grid.width(), event.grid.height());
+        // Defensive: remove any existing Grid entity first.
+        for e in existing_grid.iter() {
+            commands.entity(e).despawn();
+        }
+        // Spawn fresh Grid singleton. No Replicated marker — client-local.
+        commands.spawn(event.grid.clone());
+        // Dirty every chunk so they re-mesh on the next chunk_render pass.
+        for chunk in chunks.iter() {
+            commands.entity(chunk).insert(ChunkDirty);
+        }
+    }
+}
+
+/// Client-side: applies a single-tile delta from the host. Early-returns if
+/// the Grid singleton doesn't exist yet (pre-snapshot race window); any lost
+/// pre-snapshot events are already reflected in the snapshot that's arriving.
+pub fn apply_tile_changed(
+    mut commands: Commands,
+    mut events: EventReader<TileChanged>,
+    mut grid_q: Query<&mut Grid>,
+    chunks_q: Query<(Entity, &TerrainChunk)>,
+) {
+    let Ok(mut grid) = grid_q.get_single_mut() else {
+        // No Grid yet — drain and drop. Snapshot will supersede.
+        events.clear();
+        return;
+    };
+    for event in events.read() {
+        grid.set(event.pos.x, event.pos.y, event.tile);
+        // Dirty only the owning chunk.
+        let chunk_coord = IVec2::new(
+            event.pos.x.div_euclid(crate::systems::chunk_lifecycle::CHUNK_TILES),
+            event.pos.y.div_euclid(crate::systems::chunk_lifecycle::CHUNK_TILES),
+        );
+        for (e, c) in chunks_q.iter() {
+            if c.coord == chunk_coord {
+                commands.entity(e).insert(ChunkDirty);
+                break;
+            }
+        }
+    }
+}
+
+/// Client-side: after replicon applies replicated Transform updates in
+/// PreUpdate, restore the LocalPlayer's Transform from `AuthoritativeTransform`
+/// so inbound server-origin updates for our own player don't clobber our
+/// client-authoritative position. Runs on the Update schedule (in
+/// `InputSet::ReadInput`) — by then, PreUpdate (including
+/// `ClientSet::Receive`) is complete.
+pub fn restore_local_transform_from_authoritative(
+    mut q: Query<(&mut Transform, &AuthoritativeTransform), With<LocalPlayer>>,
+) {
+    let Ok((mut xf, auth)) = q.get_single_mut() else { return };
+    // Only write if there's an actual divergence. Bevy's change detection
+    // means an unconditional write would dirty Transform every frame,
+    // which could affect other Changed<Transform> filters elsewhere.
+    if xf.translation != auth.0 {
+        xf.translation = auth.0;
+    }
+}
+
+/// Client-side: every `POSITION_SYNC_HZ` ticks, ship our LocalPlayer's
+/// Transform + Facing to the host via `ClientPositionUpdate`. Gated on
+/// `NetMode::Client` internally rather than via `.run_if(...)` so the
+/// system exists in the schedule in Host mode too (where it no-ops) —
+/// avoids the registration divergence between modes. Follows the same
+/// pattern as `exit_on_host_disconnect`.
+pub fn send_local_position_system(
+    time: Res<Time>,
+    mut timer: ResMut<LocalPositionSyncTimer>,
+    net_mode: Res<NetMode>,
+    player_q: Option<Single<(&Transform, &Facing), With<LocalPlayer>>>,
+    mut writer: EventWriter<ClientPositionUpdate>,
+) {
+    // Tick the timer unconditionally so it stays in sync even in non-Client
+    // modes. If we only ticked inside the Client gate, a reconnect flow that
+    // toggles through Host → Client could fire the first event instantly
+    // rather than waiting the full 100 ms.
+    timer.0.tick(time.delta());
+    if !matches!(*net_mode, NetMode::Client { .. }) {
         return;
     }
-    for chunk in &chunks {
-        commands.entity(chunk).insert(ChunkDirty);
+    if !timer.0.just_finished() {
+        return;
     }
+    let Some(p) = player_q else { return }; // LocalPlayer not tagged yet
+    let (xf, facing) = p.into_inner();
+    writer.send(ClientPositionUpdate {
+        pos: xf.translation.truncate(),
+        facing: facing.0,
+    });
 }

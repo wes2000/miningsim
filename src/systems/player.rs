@@ -1,13 +1,14 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use crate::components::{ChunkDirty, Facing, LocalPlayer, OreDrop, Player, TerrainChunk, Velocity};
+use crate::components::{AuthoritativeTransform, ChunkDirty, Facing, LocalPlayer, OreDrop, Player, TerrainChunk, Velocity};
 use crate::coords::{self, TILE_SIZE_PX};
 use crate::dig::{self, DigStatus};
 use crate::grid::Grid;
 use crate::items::ItemKind;
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
 use crate::systems::hud::item_color;
-use crate::systems::net_events::DigRequest;
+use crate::systems::net_events::{DigRequest, TileChanged};
+use bevy_replicon::prelude::{SendMode, ToClients};
 
 #[derive(Resource)]
 pub struct DigCooldown(pub Timer);
@@ -57,22 +58,34 @@ pub fn read_input_system(
 
 pub fn apply_velocity_system(
     time: Res<Time>,
-    mut q: Query<(&Velocity, &mut Transform), With<Player>>,
+    // `With<Player>` matches every Player entity — host's own LocalPlayer, the
+    // host-side mirror of each remote client's Player, and client-side
+    // LocalPlayer/RemotePlayer. Only those with `Velocity` are iterated. The
+    // host-side mirrors of remote players are spawned without `Velocity` (see
+    // `spawn_player_for_new_clients` in net_player.rs), so they're excluded —
+    // their Transform is driven by the `handle_client_position_updates`
+    // handler, not local integration. The `Option<&mut AuthoritativeTransform>`
+    // tracks client-LocalPlayer only; host/SP players lack the component and
+    // silently no-op.
+    mut q: Query<(&Velocity, &mut Transform, Option<&mut AuthoritativeTransform>), With<Player>>,
 ) {
     let dt = time.delta_secs();
-    for (v, mut t) in q.iter_mut() {
+    for (v, mut t, auth) in q.iter_mut() {
         t.translation.x += v.0.x * dt;
         t.translation.y += v.0.y * dt;
+        if let Some(mut auth) = auth {
+            auth.0 = t.translation;
+        }
     }
 }
 
 pub fn collide_player_with_grid_system(
     grid: Option<Single<&Grid>>,
-    mut q: Query<&mut Transform, With<LocalPlayer>>,
+    mut q: Query<(&mut Transform, Option<&mut AuthoritativeTransform>), With<LocalPlayer>>,
 ) {
     let Some(grid) = grid else { return };
     let grid = grid.into_inner();
-    let Ok(mut t) = q.get_single_mut() else { return };
+    let Ok((mut t, auth)) = q.get_single_mut() else { return };
 
     // Resolve X then Y. Player AABB is [pos.xy ± PLAYER_HALF].
     // Convert world to tile coords. World y is negative-down; tile y is positive-down.
@@ -121,6 +134,9 @@ pub fn collide_player_with_grid_system(
             }
         }
     }
+    if let Some(mut auth) = auth {
+        auth.0 = t.translation;
+    }
 }
 
 pub fn dig_input_system(
@@ -137,6 +153,7 @@ pub fn dig_input_system(
     time: Res<Time>,
     net_mode: Res<crate::net::NetMode>,
     mut dig_writer: EventWriter<DigRequest>,
+    mut tile_writer: EventWriter<ToClients<TileChanged>>,
 ) {
     let (Some(grid), Some(owned_tools)) = (grid, owned_tools) else { return };
     cooldown.0.tick(time.delta());
@@ -188,6 +205,16 @@ pub fn dig_input_system(
     match result.status {
         DigStatus::Broken | DigStatus::Damaged => {
             cooldown.0.reset();
+            // NEW: in Host mode, tell all clients about this tile change.
+            // (SinglePlayer skips — no clients to notify.)
+            if matches!(*net_mode, crate::net::NetMode::Host { .. }) {
+                if let Some(new_tile) = grid.get(target_tile.x, target_tile.y).copied() {
+                    tile_writer.send(ToClients {
+                        mode: SendMode::Broadcast,
+                        event: TileChanged { pos: target_tile, tile: new_tile },
+                    });
+                }
+            }
             // Mark owning chunk dirty.
             let chunk_coord = IVec2::new(
                 target_tile.x.div_euclid(CHUNK_TILES),

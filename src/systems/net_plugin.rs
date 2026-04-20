@@ -2,7 +2,9 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use bevy_replicon_renet::RepliconRenetPlugins;
 
-use crate::components::{ChunkDirty, NetOwner, OreDrop, OwningClient, Player, Shop, Smelter, TerrainChunk};
+use crate::app::InputSet;
+use crate::belt::{self, BeltTile, BeltVisual};
+use crate::components::{ChunkDirty, Facing, NetOwner, OreDrop, OwningClient, Player, Shop, Smelter, TerrainChunk};
 use crate::coords::{tile_center_world, world_to_tile};
 use crate::dig::{self, DigStatus};
 use crate::economy::{self, Money};
@@ -13,7 +15,8 @@ use crate::processing::{self, SmelterState};
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
 use crate::systems::hud::item_color;
 use crate::systems::net_events::{
-    BuyToolRequest, CollectAllRequest, DigRequest, SellAllRequest, SmeltAllRequest,
+    BuyToolRequest, ClientPositionUpdate, CollectAllRequest, DigRequest, GridSnapshot,
+    PlaceBeltRequest, RemoveBeltRequest, SellAllRequest, SmeltAllRequest, TileChanged,
 };
 use crate::systems::net_player;
 use crate::systems::player::DIG_REACH_TILES;
@@ -27,11 +30,8 @@ impl Plugin for MultiplayerPlugin {
         app.add_plugins(RepliconRenetPlugins);
 
         // Replicated components — host writes, all clients read.
-        // Grid replicates as a Component on a singleton entity, spawned in
-        // setup_world with Replicated marker (Task 9.5). Replication ships a
-        // full Grid snapshot on every change (~MAP_W * MAP_H * sizeof(Tile)
-        // bytes ≈ 16 KB at 80x200). Acceptable at current scale; revisit with
-        // delta encoding if the map grows.
+        // Grid is NOT replicated here; it syncs via M5b GridSnapshot (full
+        // on connect) and TileChanged (per-dig delta) server events instead.
         app.replicate::<Player>()
             .replicate::<NetOwner>()
             .replicate::<Shop>()
@@ -39,9 +39,9 @@ impl Plugin for MultiplayerPlugin {
             .replicate::<SmelterState>()
             .replicate::<OreDrop>()
             .replicate::<Money>()
-            .replicate::<Grid>()
             .replicate::<Inventory>()
             .replicate::<OwnedTools>()
+            .replicate::<BeltTile>()
             .replicate::<Transform>();
 
         // Client-fired events (client → server). 0.32 uses `Channel`, not `ChannelKind`.
@@ -50,6 +50,13 @@ impl Plugin for MultiplayerPlugin {
         app.add_client_event::<SmeltAllRequest>(Channel::Ordered);
         app.add_client_event::<CollectAllRequest>(Channel::Ordered);
         app.add_client_event::<SellAllRequest>(Channel::Ordered);
+        app.add_client_event::<ClientPositionUpdate>(Channel::Unreliable);
+        app.add_client_event::<PlaceBeltRequest>(Channel::Ordered);
+        app.add_client_event::<RemoveBeltRequest>(Channel::Ordered);
+
+        // M5b server events — host-authoritative Grid sync.
+        app.add_server_event::<GridSnapshot>(Channel::Ordered);
+        app.add_server_event::<TileChanged>(Channel::Ordered);
 
         // Server-side request handlers. Run only when this app is acting as
         // the server (replicon's `server_running` condition). The host's own
@@ -65,6 +72,17 @@ impl Plugin for MultiplayerPlugin {
                 handle_smelt_all_requests,
                 handle_collect_all_requests,
                 handle_sell_all_requests,
+                // Position updates MUST run before handle_dig_requests in the
+                // same tick so the reach check sees the client's latest
+                // authoritative position. Without this ordering, a DigRequest
+                // and a ClientPositionUpdate arriving in the same tick would
+                // race — if dig runs first with stale Transform, the reach
+                // check rejects any dig more than 2 tiles from the last-known
+                // position (including silently rejecting legitimate digs the
+                // moment a client walks past its own stale footprint).
+                handle_client_position_updates.before(handle_dig_requests),
+                handle_place_belt_requests,
+                handle_remove_belt_requests,
             )
                 .run_if(server_running),
         );
@@ -76,6 +94,7 @@ impl Plugin for MultiplayerPlugin {
         // entities are spawned/despawned, which only happens on the server side).
         app.add_observer(net_player::spawn_player_for_new_clients);
         app.add_observer(net_player::despawn_player_for_disconnected_clients);
+        app.add_observer(send_initial_grid_snapshot);
 
         // Client-side: tag arriving Players LocalPlayer/RemotePlayer + add Sprite.
         app.add_systems(
@@ -97,7 +116,19 @@ impl Plugin for MultiplayerPlugin {
                 net_player::add_shop_visuals_on_arrival,
                 net_player::add_smelter_visuals_on_arrival,
                 net_player::add_ore_drop_visuals_on_arrival,
+                net_player::add_belt_visuals_on_arrival,
             ),
+        );
+
+        // M5b: client-side grid sync from server events.
+        app.add_systems(
+            Update,
+            (
+                net_player::apply_grid_snapshot,
+                net_player::apply_tile_changed,
+            )
+                .chain()
+                .run_if(client_connected),
         );
 
         // Client-side: clean exit when the host drops. No-op (early-returns)
@@ -106,14 +137,27 @@ impl Plugin for MultiplayerPlugin {
         // the connection is lost.
         app.add_systems(Update, net_player::exit_on_host_disconnect);
 
-        // When the singleton Grid changes via replication, re-mesh chunks.
-        // Client-only: on the host, `handle_dig_requests` already targets the
-        // specific chunk that changed, so a global re-dirty here is wasteful
-        // (every chunk re-meshed on every dig). Clients have no other
-        // re-mesh trigger for replicated Grid mutations, so we need it there.
+        // M5b: client-authoritative position sync.
+        app.insert_resource(net_player::LocalPositionSyncTimer::default());
+        app.add_systems(Update, net_player::send_local_position_system);
+
+        // M5b Task 8: restore LocalPlayer Transform from AuthoritativeTransform
+        // after replicon applies inbound server-origin updates in PreUpdate.
+        // Runs at the top of Update (InputSet::ReadInput) so gameplay systems
+        // see the correct client-authoritative position.
+        //
+        // `run_if(client_connected)` is defensive belt-and-suspenders. The system's
+        // query already requires `AuthoritativeTransform`, which is only attached
+        // by the client-side `mark_local_player_on_arrival`, so the system no-ops
+        // on host/SP today. The guard makes that client-only intent explicit and
+        // prevents accidental future drift (e.g., if a refactor ever attaches
+        // `AuthoritativeTransform` to the host's LocalPlayer, this gate still
+        // prevents the restore from clamping the host's Transform).
         app.add_systems(
             Update,
-            net_player::mark_chunks_dirty_on_grid_change.run_if(client_connected),
+            net_player::restore_local_transform_from_authoritative
+                .in_set(InputSet::ReadInput)
+                .run_if(client_connected),
         );
     }
 }
@@ -137,6 +181,7 @@ pub fn handle_dig_requests(
     mut commands: Commands,
     player_q: Query<(Entity, &OwningClient, &Transform, &OwnedTools), With<Player>>,
     chunks_q: Query<(Entity, &TerrainChunk)>,
+    mut tile_writer: EventWriter<ToClients<TileChanged>>,   // NEW
 ) {
     let mut grid = grid.into_inner();
     for FromClient { client_entity, event } in events.read() {
@@ -156,6 +201,14 @@ pub fn handle_dig_requests(
 
         let result = dig::try_dig(&mut grid, event.target, tool);
         if matches!(result.status, DigStatus::Broken | DigStatus::Damaged) {
+            // NEW: broadcast the new tile state to clients.
+            if let Some(new_tile) = grid.get(event.target.x, event.target.y).copied() {
+                tile_writer.send(ToClients {
+                    mode: SendMode::Broadcast,
+                    event: TileChanged { pos: event.target, tile: new_tile },
+                });
+            }
+            // Existing: mark the owning chunk dirty so chunk_render rebuilds the mesh.
             let chunk_coord = IVec2::new(
                 event.target.x.div_euclid(CHUNK_TILES),
                 event.target.y.div_euclid(CHUNK_TILES),
@@ -241,5 +294,107 @@ pub fn handle_sell_all_requests(
         let Some(e) = player_entity_for_client(*client_entity, &player_q) else { continue };
         let Ok((mut inv, mut money)) = inv_money_q.get_mut(e) else { continue };
         economy::sell_all(&mut inv, &mut money);
+    }
+}
+
+/// Server-side: write the client's reported position onto its server-side
+/// Player Transform. Trust-based — we don't validate or speed-cap. Mutation
+/// triggers replicon's change detection, which broadcasts Transform updates
+/// to all OTHER clients via the existing `.replicate::<Transform>()`.
+pub fn handle_client_position_updates(
+    mut events: EventReader<FromClient<ClientPositionUpdate>>,
+    player_q: Query<(Entity, &OwningClient), With<Player>>,
+    mut xf_q: Query<(&mut Transform, Option<&mut Facing>), With<Player>>,
+) {
+    for FromClient { client_entity, event } in events.read() {
+        let Some(e) = player_entity_for_client(*client_entity, &player_q) else { continue };
+        let Ok((mut xf, facing)) = xf_q.get_mut(e) else { continue };
+        xf.translation.x = event.pos.x;
+        xf.translation.y = event.pos.y;
+        // Don't touch z; it was set at spawn and drives sprite layering.
+        if let Some(mut facing) = facing {
+            facing.0 = event.facing;
+        }
+    }
+}
+
+/// Server observer: when a new client connects (replicon spawns an entity
+/// with `ConnectedClient`), send them the full current Grid via a one-shot
+/// `GridSnapshot` event. Runs only on the server (ConnectedClient entities
+/// only exist server-side).
+pub fn send_initial_grid_snapshot(
+    trigger: Trigger<OnAdd, ConnectedClient>,
+    grid_q: Query<&Grid>,
+    mut writer: EventWriter<ToClients<GridSnapshot>>,
+) {
+    let client_entity = trigger.entity();
+    let Ok(grid) = grid_q.get_single() else {
+        warn!("send_initial_grid_snapshot: Grid singleton missing; client {client_entity} will see no terrain");
+        return;
+    };
+    info!("sending initial grid snapshot to client {client_entity} ({}x{})", grid.width(), grid.height());
+    writer.send(ToClients {
+        mode: SendMode::Direct(client_entity),
+        event: GridSnapshot { grid: grid.clone() },
+    });
+}
+
+pub fn handle_place_belt_requests(
+    mut events: EventReader<FromClient<PlaceBeltRequest>>,
+    mut commands: Commands,
+    grid: Single<&Grid>,
+    belts_q: Query<&Transform, With<BeltTile>>,
+    shops_q: Query<&Transform, With<Shop>>,
+    smelters_q: Query<&Transform, With<Smelter>>,
+) {
+    let grid = grid.into_inner();
+    for FromClient { event, .. } in events.read() {
+        let tile = event.tile;
+        let in_bounds_and_floor = grid.get(tile.x, tile.y).is_some_and(|g| !g.solid);
+        let occupied: std::collections::HashSet<IVec2> = belts_q
+            .iter()
+            .chain(shops_q.iter())
+            .chain(smelters_q.iter())
+            .map(|xf| world_to_tile(xf.translation.truncate()))
+            .collect();
+        if !belt::can_place_belt(tile, in_bounds_and_floor, &occupied) { continue }
+
+        let center = tile_center_world(tile);
+        commands.spawn((
+            BeltTile::new(event.dir),
+            BeltVisual::Straight,
+            Transform::from_translation(center.extend(3.0)),
+            Replicated,
+        ));
+    }
+}
+
+pub fn handle_remove_belt_requests(
+    mut events: EventReader<FromClient<RemoveBeltRequest>>,
+    mut commands: Commands,
+    belts_q: Query<(Entity, &Transform, &BeltTile)>,
+) {
+    for FromClient { event, .. } in events.read() {
+        let target = event.tile;
+        for (e, xf, bt) in belts_q.iter() {
+            let pos = world_to_tile(xf.translation.truncate());
+            if pos != target { continue }
+
+            if let Some(item) = bt.item {
+                let center = tile_center_world(pos);
+                commands.spawn((
+                    OreDrop { item },
+                    Sprite {
+                        color: item_color(item),
+                        custom_size: Some(Vec2::splat(6.0)),
+                        ..default()
+                    },
+                    Transform::from_translation(center.extend(4.0)),
+                    Replicated,
+                ));
+            }
+            commands.entity(e).despawn();
+            break;
+        }
     }
 }
