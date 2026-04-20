@@ -150,13 +150,17 @@ pub fn compute_belt_advances(
         }
     }
 
-    // Pass 2: a move succeeds iff its destination is vacated this tick.
-    // "Vacated" means: dest doesn't currently have an item, OR dest has an
-    // item whose own move (transitively) succeeds. We resolve this by
-    // repeated propagation: start with destinations that are obviously vacant
-    // (no item there OR not in the belt graph), mark their predecessors as
-    // "can move", then expand backwards. Bounded by N rounds where N is the
-    // number of intended moves.
+    // Pass 2: resolve which intended moves succeed. A move succeeds iff its
+    // destination is vacated this tick — either the destination starts empty,
+    // or the destination's own mover also succeeds (cascade), or the move is
+    // part of a closed cycle where every member intends to move (lockstep
+    // rotation). We compute this by alternating two sub-passes inside an outer
+    // fixed-point loop:
+    //   (a) propagation: a move can succeed if its destination's mover can.
+    //   (b) cycle detection: walk intended-graph chains; if a chain loops
+    //       back to its start, the whole closed cycle can move.
+    // The outer loop catches "rho-shape" graphs (a tail feeding a cycle):
+    // pass (b) marks the cycle, then pass (a) propagates back along the tail.
     let mut can_move: std::collections::HashSet<bevy::math::IVec2> = std::collections::HashSet::new();
 
     // Seed: any intended move whose destination starts empty (no item there).
@@ -166,68 +170,70 @@ pub fn compute_belt_advances(
         }
     }
 
-    // Propagate: a move can succeed if its destination's mover can succeed.
-    // Repeat until fixed point. Cycles where every member can move (saturated
-    // cycle with everyone intending to move) are handled by a separate cycle
-    // detection pass below; this loop only catches "downstream item is moving"
-    // cascades that aren't full cycles.
     loop {
+        // (a) Propagation sub-pass: a move can succeed if its destination's mover can.
         let mut grew = false;
-        for (&from, &to) in intended.iter() {
-            if can_move.contains(&from) { continue }
-            // If `to` is itself an intended-mover that can_move, then we cascade.
-            if can_move.contains(&to) {
-                can_move.insert(from);
-                grew = true;
+        loop {
+            let mut grew_inner = false;
+            for (&from, &to) in intended.iter() {
+                if can_move.contains(&from) { continue }
+                if can_move.contains(&to) {
+                    can_move.insert(from);
+                    grew_inner = true;
+                    grew = true;
+                }
+            }
+            if !grew_inner { break }
+        }
+
+        // (b) Cycle-detection sub-pass: walk intended-graph chains from each
+        //     unresolved start; if we loop back to start, the whole cycle moves.
+        let unresolved: Vec<bevy::math::IVec2> = intended
+            .keys()
+            .filter(|p| !can_move.contains(p))
+            .copied()
+            .collect();
+        for start in unresolved {
+            if can_move.contains(&start) { continue }
+            let mut path: Vec<bevy::math::IVec2> = Vec::new();
+            let mut visited: std::collections::HashSet<bevy::math::IVec2> = std::collections::HashSet::new();
+            let mut cur = start;
+            loop {
+                if visited.contains(&cur) {
+                    if cur == start {
+                        for p in &path {
+                            can_move.insert(*p);
+                            grew = true;
+                        }
+                    }
+                    break;
+                }
+                visited.insert(cur);
+                path.push(cur);
+                let Some(&next) = intended.get(&cur) else { break };
+                if !intended.contains_key(&next) { break }
+                cur = next;
             }
         }
+
         if !grew { break }
     }
 
-    // Cycle pass: if EVERY member of a cycle is in `intended` (everyone
-    // wants to move), then the whole cycle rotates in lockstep. We detect
-    // by walking the intended graph from each unresolved node and checking
-    // if we eventually return to the start; if so, mark the entire walk as
-    // can_move.
-    let unresolved: Vec<bevy::math::IVec2> = intended
-        .keys()
-        .filter(|p| !can_move.contains(p))
-        .copied()
-        .collect();
-    for start in unresolved {
-        if can_move.contains(&start) { continue }
-        // Walk from `start` along `intended` chain. If we revisit `start`,
-        // the chain is a closed cycle of intended movers — all rotate.
-        let mut path: Vec<bevy::math::IVec2> = Vec::new();
-        let mut visited: std::collections::HashSet<bevy::math::IVec2> = std::collections::HashSet::new();
-        let mut cur = start;
-        loop {
-            if visited.contains(&cur) {
-                // We hit a previously-visited node. If it's `start`, we have a closed
-                // cycle through `path`; all path nodes rotate.
-                if cur == start {
-                    for p in &path {
-                        can_move.insert(*p);
-                    }
-                }
-                break;
-            }
-            visited.insert(cur);
-            path.push(cur);
-            // Continue walking iff the next node is also an intended mover.
-            let Some(&next) = intended.get(&cur) else { break };
-            if !intended.contains_key(&next) { break }
-            cur = next;
-        }
-    }
-
-    // Emit moves in deterministic order: sort by (from.x, from.y) so the
-    // returned Vec is reproducible across runs (HashMap iteration is not).
-    let mut moves: Vec<(bevy::math::IVec2, bevy::math::IVec2)> = intended
+    // Y-merge arbitration: if multiple intended moves point at the same
+    // destination, pick exactly one (the source with the lowest (x,y) sort
+    // order — deterministic and reproducible). Drop the others. Without this,
+    // the apply step would land two items on one tile.
+    let mut moves_by_source: Vec<(bevy::math::IVec2, bevy::math::IVec2)> = intended
         .iter()
         .filter(|(from, _)| can_move.contains(from))
         .map(|(&from, &to)| (from, to))
         .collect();
-    moves.sort_by_key(|(from, _)| (from.x, from.y));
+    // Sort ascending so iter().next() gives the smallest source per destination.
+    moves_by_source.sort_by_key(|(from, _)| (from.x, from.y));
+    let mut destinations_taken: std::collections::HashSet<bevy::math::IVec2> = std::collections::HashSet::new();
+    let moves: Vec<(bevy::math::IVec2, bevy::math::IVec2)> = moves_by_source
+        .into_iter()
+        .filter(|(_, to)| destinations_taken.insert(*to))
+        .collect();
     moves
 }

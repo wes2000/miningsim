@@ -192,3 +192,57 @@ fn back_pressure_cycle_with_slack_rotates() {
     assert!(moves_set.contains(&(IVec2::new(1, 1), IVec2::new(0, 1))));
     assert_eq!(moves_set.len(), 3);
 }
+
+#[test]
+fn back_pressure_rho_shape_propagates_after_cycle() {
+    // Layout: tail belt at (-1,0) East feeds into a 4-belt CW cycle at
+    // (0,0)→(1,0)→(1,1)→(0,1)→(0,0). All five belts have items. The cycle
+    // is saturated so it rotates in lockstep; the tail item then advances
+    // into the just-vacated cycle slot.
+    let belt_dirs = dirs(&[
+        (IVec2::new(-1, 0), BeltDir::East),     // tail
+        (IVec2::new(0, 0),  BeltDir::East),     // cycle
+        (IVec2::new(1, 0),  BeltDir::South),
+        (IVec2::new(1, 1),  BeltDir::West),
+        (IVec2::new(0, 1),  BeltDir::North),
+    ]);
+    let item_positions = items(&[
+        IVec2::new(-1, 0),
+        IVec2::new(0, 0), IVec2::new(1, 0), IVec2::new(1, 1), IVec2::new(0, 1),
+    ]);
+    let moves = belt::compute_belt_advances(&belt_dirs, &item_positions);
+    let moves_set: HashSet<(IVec2, IVec2)> = moves.into_iter().collect();
+    // All five items advance: cycle rotates one slot, tail advances into the
+    // (0,0) slot vacated by the cycle's rotation.
+    // BUT: this is a Y-merge — the tail at (-1,0) and the cycle node (0,1)
+    // both target (0,0). Y-merge arbitration picks exactly one.
+    // The (0,1)→(0,0) move belongs to the cycle and goes through cycle-pass
+    // marking; (-1,0)→(0,0) goes through propagation. Both end up in
+    // can_move, then arbitration drops one. Sort order: (-1,0) < (0,1) by
+    // (x,y), so (-1,0) wins.
+    assert!(moves_set.contains(&(IVec2::new(-1, 0), IVec2::new(0, 0))),
+            "tail should advance into vacated cycle slot");
+    // Other three cycle moves still happen.
+    assert!(moves_set.contains(&(IVec2::new(0, 0), IVec2::new(1, 0))));
+    assert!(moves_set.contains(&(IVec2::new(1, 0), IVec2::new(1, 1))));
+    assert!(moves_set.contains(&(IVec2::new(1, 1), IVec2::new(0, 1))));
+    // (0,1)→(0,0) was dropped by Y-merge arbitration in favor of the tail.
+    // Net effect: 4 moves applied; the cycle item that wanted (0,0) stays put.
+    assert_eq!(moves_set.len(), 4);
+}
+
+#[test]
+fn back_pressure_y_merge_arbitrates_to_single_winner() {
+    // Two belts both pointing at the same destination tile. The destination
+    // is not a belt itself (off-graph). Both want to move into (5,5). Only
+    // one move should be emitted.
+    let belt_dirs = dirs(&[
+        (IVec2::new(4, 5), BeltDir::East),  // wants → (5,5)
+        (IVec2::new(5, 4), BeltDir::South), // wants → (5,5)
+    ]);
+    let item_positions = items(&[IVec2::new(4, 5), IVec2::new(5, 4)]);
+    let moves = belt::compute_belt_advances(&belt_dirs, &item_positions);
+    assert_eq!(moves.len(), 1, "Y-merge arbitration should keep exactly one move per destination");
+    // Sort order: (4,5) < (5,4) by (x,y), so (4,5) wins.
+    assert_eq!(moves[0], (IVec2::new(4, 5), IVec2::new(5, 5)));
+}
