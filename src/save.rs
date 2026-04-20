@@ -1,12 +1,14 @@
+use bevy::math::IVec2;
 use serde::{Deserialize, Serialize};
 
+use crate::belt::BeltTile;
 use crate::economy::Money;
 use crate::grid::Grid;
 use crate::inventory::Inventory;
 use crate::processing::SmelterState;
 use crate::tools::OwnedTools;
 
-pub const SAVE_VERSION: u32 = 2;
+pub const SAVE_VERSION: u32 = 3;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SaveData {
@@ -21,6 +23,7 @@ pub struct SaveData {
     /// Player world position as `(x, y)`. Plain array avoids pulling
     /// Bevy types into the pure module.
     pub player_pos: [f32; 2],
+    pub belts: Vec<(IVec2, BeltTile)>,
 }
 
 #[derive(Debug)]
@@ -37,15 +40,17 @@ pub fn collect(
     owned: &OwnedTools,
     smelter: &SmelterState,
     player_pos: [f32; 2],
+    belts: Vec<(IVec2, BeltTile)>,
 ) -> SaveData {
     SaveData {
         version: SAVE_VERSION,
         grid: grid.clone(),
         inventory: inventory.clone(),
-        money: *money,                 // Money is Copy
+        money: *money,
         owned_tools: owned.clone(),
         smelter: smelter.clone(),
         player_pos,
+        belts,
     }
 }
 
@@ -57,13 +62,14 @@ pub fn apply(
     owned: &mut OwnedTools,
     smelter: &mut SmelterState,
     player_pos: &mut [f32; 2],
-) {
+) -> Vec<(IVec2, BeltTile)> {
     *grid = data.grid;
     *inventory = data.inventory;
     *money = data.money;
     *owned = data.owned_tools;
     *smelter = data.smelter;
     *player_pos = data.player_pos;
+    data.belts
 }
 
 pub fn serialize_ron(data: &SaveData) -> Result<String, ron::Error> {
