@@ -37,7 +37,9 @@ pub struct OwningClient(pub Entity);
 
 /// Replicated marker carrying the renet `client_id` (u64) of the player's
 /// owning client. Server inserts it on every Player spawn (host's own local
-/// Player gets `NetOwner(0)` so remote clients can render it as a remote peer).
+/// Player gets `NetOwner(HOST_NET_OWNER) = u64::MAX` — a reserved sentinel
+/// that's above the millis-derived real client_id range, so remote clients
+/// can render it as a remote peer without colliding with a real id).
 /// Clients compare it against [`LocalClientId`] to decide LocalPlayer vs.
 /// RemotePlayer when arriving Players are tagged.
 #[derive(Component, Debug, Clone, Copy, Serialize, Deserialize)]

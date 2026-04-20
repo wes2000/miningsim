@@ -366,25 +366,14 @@ pub fn add_belt_visuals_on_arrival(
     new_belts: Query<(Entity, &crate::belt::BeltTile), (Added<crate::belt::BeltTile>, Without<Sprite>)>,
 ) {
     for (e, bt) in new_belts.iter() {
-        let color = belt_color_for_dir(bt.dir);
         commands.entity(e).insert((
             Sprite {
-                color,
+                color: crate::systems::belt_ui::belt_color(bt.dir),
                 custom_size: Some(Vec2::splat(crate::coords::TILE_SIZE_PX)),
                 ..default()
             },
             crate::belt::BeltVisual::Straight,
         ));
-    }
-}
-
-fn belt_color_for_dir(dir: crate::belt::BeltDir) -> Color {
-    use crate::belt::BeltDir;
-    match dir {
-        BeltDir::North => Color::srgb(0.20, 0.55, 0.20),
-        BeltDir::East  => Color::srgb(0.60, 0.55, 0.20),
-        BeltDir::South => Color::srgb(0.55, 0.20, 0.20),
-        BeltDir::West  => Color::srgb(0.20, 0.20, 0.55),
     }
 }
 
@@ -452,7 +441,10 @@ pub fn apply_tile_changed(
     chunks_q: Query<(Entity, &TerrainChunk)>,
 ) {
     let Ok(mut grid) = grid_q.get_single_mut() else {
-        // No Grid yet — drain and drop. Snapshot will supersede.
+        // No Grid yet — drain and drop (explicitly intentional, not a
+        // leftover shortcut: any pre-snapshot tile deltas are already
+        // reflected in the snapshot we're about to receive, so nothing
+        // is lost by discarding them).
         events.clear();
         return;
     };
