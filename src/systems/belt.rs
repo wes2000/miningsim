@@ -1,10 +1,14 @@
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use crate::belt::{self, BeltTile};
+use crate::belt::{self, BeltDir, BeltTile};
 use crate::components::{OreDrop, Smelter};
 use crate::coords::{tile_center_world, world_to_tile};
+use crate::items::{ItemKind, OreKind};
+use crate::processing::{self, SmelterState};
 use crate::systems::hud::item_color;
+
+const SMELTER_QUEUE_CAP: u32 = 8;
 
 pub const BELT_TICK_SECONDS: f32 = 1.0;
 
@@ -118,5 +122,81 @@ pub fn belt_spillage_system(
             Transform::from_translation(dest_world.extend(4.0)),
         ));
         bt.item = None;
+    }
+}
+
+pub fn smelter_belt_io_system(
+    mut belts_q: Query<(&Transform, &mut BeltTile)>,
+    mut smelters_q: Query<(&Transform, &mut SmelterState)>,
+) {
+    let belt_positions: HashMap<bevy::math::IVec2, BeltDir> = belts_q
+        .iter()
+        .map(|(xf, bt)| (world_to_tile(xf.translation.truncate()), bt.dir))
+        .collect();
+
+    for (smelter_xf, mut state) in smelters_q.iter_mut() {
+        let smelter_pos = world_to_tile(smelter_xf.translation.truncate());
+
+        // ---- Pull (input) ----
+        for &side in &[BeltDir::North, BeltDir::East, BeltDir::South, BeltDir::West] {
+            let neighbor_pos = smelter_pos + side.delta();
+            let Some(neighbor_dir) = belt_positions.get(&neighbor_pos) else { continue };
+            if *neighbor_dir != side.opposite() { continue }
+
+            let mut consumed = false;
+            for (belt_xf, mut belt_tile) in belts_q.iter_mut() {
+                if world_to_tile(belt_xf.translation.truncate()) != neighbor_pos { continue }
+                let Some(item) = belt_tile.item else { break };
+                let ItemKind::Ore(ore) = item else { break };
+
+                match state.recipe {
+                    None => {
+                        state.recipe = Some(ore);
+                        state.queue = 1;
+                        state.time_left = processing::SMELT_DURATION_S;
+                        belt_tile.item = None;
+                        consumed = true;
+                    }
+                    Some(current) if current == ore && state.queue < SMELTER_QUEUE_CAP => {
+                        state.queue += 1;
+                        belt_tile.item = None;
+                        consumed = true;
+                    }
+                    _ => {}
+                }
+                break;
+            }
+            if consumed { break }
+        }
+
+        // ---- Push (output) ----
+        let has_output = state.output.values().any(|&n| n > 0);
+        if !has_output { continue }
+
+        for &side in &[BeltDir::North, BeltDir::East, BeltDir::South, BeltDir::West] {
+            let neighbor_pos = smelter_pos + side.delta();
+            let Some(neighbor_dir) = belt_positions.get(&neighbor_pos) else { continue };
+            if *neighbor_dir != side { continue }
+
+            let mut pushed = false;
+            for (belt_xf, mut belt_tile) in belts_q.iter_mut() {
+                if world_to_tile(belt_xf.translation.truncate()) != neighbor_pos { continue }
+                if belt_tile.item.is_some() { break }
+
+                let mut to_drain: Option<OreKind> = None;
+                for (&ore, &n) in state.output.iter() {
+                    if n > 0 { to_drain = Some(ore); break }
+                }
+                let Some(ore) = to_drain else { break };
+                if let Some(n) = state.output.get_mut(&ore) {
+                    *n -= 1;
+                    if *n == 0 { state.output.remove(&ore); }
+                }
+                belt_tile.item = Some(ItemKind::Bar(ore));
+                pushed = true;
+                break;
+            }
+            if pushed { break }
+        }
     }
 }
