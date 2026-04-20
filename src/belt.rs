@@ -74,6 +74,16 @@ pub fn next_tile(pos: IVec2, dir: BeltDir) -> IVec2 {
     pos + dir.delta()
 }
 
+/// Validate a candidate belt placement. Pure — caller projects World state
+/// into (is the tile a walkable floor within bounds, set of occupied tiles).
+pub fn can_place_belt(
+    tile: IVec2,
+    in_bounds_and_floor: bool,
+    occupied_tiles: &std::collections::HashSet<IVec2>,
+) -> bool {
+    in_bounds_and_floor && !occupied_tiles.contains(&tile)
+}
+
 pub fn belt_visual_kind(self_dir: BeltDir, feeder_dir: Option<BeltDir>) -> BeltVisual {
     let Some(fd) = feeder_dir else { return BeltVisual::Straight };
 

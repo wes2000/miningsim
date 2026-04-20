@@ -3,7 +3,7 @@ use bevy_replicon::prelude::*;
 use bevy_replicon_renet::RepliconRenetPlugins;
 
 use crate::app::InputSet;
-
+use crate::belt::{self, BeltTile, BeltVisual};
 use crate::components::{ChunkDirty, Facing, NetOwner, OreDrop, OwningClient, Player, Shop, Smelter, TerrainChunk};
 use crate::coords::{tile_center_world, world_to_tile};
 use crate::dig::{self, DigStatus};
@@ -16,7 +16,7 @@ use crate::systems::chunk_lifecycle::CHUNK_TILES;
 use crate::systems::hud::item_color;
 use crate::systems::net_events::{
     BuyToolRequest, ClientPositionUpdate, CollectAllRequest, DigRequest, GridSnapshot,
-    SellAllRequest, SmeltAllRequest, TileChanged,
+    PlaceBeltRequest, RemoveBeltRequest, SellAllRequest, SmeltAllRequest, TileChanged,
 };
 use crate::systems::net_player;
 use crate::systems::player::DIG_REACH_TILES;
@@ -41,6 +41,7 @@ impl Plugin for MultiplayerPlugin {
             .replicate::<Money>()
             .replicate::<Inventory>()
             .replicate::<OwnedTools>()
+            .replicate::<BeltTile>()
             .replicate::<Transform>();
 
         // Client-fired events (client → server). 0.32 uses `Channel`, not `ChannelKind`.
@@ -50,6 +51,8 @@ impl Plugin for MultiplayerPlugin {
         app.add_client_event::<CollectAllRequest>(Channel::Ordered);
         app.add_client_event::<SellAllRequest>(Channel::Ordered);
         app.add_client_event::<ClientPositionUpdate>(Channel::Unreliable);
+        app.add_client_event::<PlaceBeltRequest>(Channel::Ordered);
+        app.add_client_event::<RemoveBeltRequest>(Channel::Ordered);
 
         // M5b server events — host-authoritative Grid sync.
         app.add_server_event::<GridSnapshot>(Channel::Ordered);
@@ -78,6 +81,8 @@ impl Plugin for MultiplayerPlugin {
                 // position (including silently rejecting legitimate digs the
                 // moment a client walks past its own stale footprint).
                 handle_client_position_updates.before(handle_dig_requests),
+                handle_place_belt_requests,
+                handle_remove_belt_requests,
             )
                 .run_if(server_running),
         );
@@ -111,6 +116,7 @@ impl Plugin for MultiplayerPlugin {
                 net_player::add_shop_visuals_on_arrival,
                 net_player::add_smelter_visuals_on_arrival,
                 net_player::add_ore_drop_visuals_on_arrival,
+                net_player::add_belt_visuals_on_arrival,
             ),
         );
 
@@ -331,4 +337,64 @@ pub fn send_initial_grid_snapshot(
         mode: SendMode::Direct(client_entity),
         event: GridSnapshot { grid: grid.clone() },
     });
+}
+
+pub fn handle_place_belt_requests(
+    mut events: EventReader<FromClient<PlaceBeltRequest>>,
+    mut commands: Commands,
+    grid: Single<&Grid>,
+    belts_q: Query<&Transform, With<BeltTile>>,
+    shops_q: Query<&Transform, With<Shop>>,
+    smelters_q: Query<&Transform, With<Smelter>>,
+) {
+    let grid = grid.into_inner();
+    for FromClient { event, .. } in events.read() {
+        let tile = event.tile;
+        let in_bounds_and_floor = grid.get(tile.x, tile.y).is_some_and(|g| !g.solid);
+        let occupied: std::collections::HashSet<IVec2> = belts_q
+            .iter()
+            .chain(shops_q.iter())
+            .chain(smelters_q.iter())
+            .map(|xf| world_to_tile(xf.translation.truncate()))
+            .collect();
+        if !belt::can_place_belt(tile, in_bounds_and_floor, &occupied) { continue }
+
+        let center = tile_center_world(tile);
+        commands.spawn((
+            BeltTile::new(event.dir),
+            BeltVisual::Straight,
+            Transform::from_translation(center.extend(3.0)),
+            Replicated,
+        ));
+    }
+}
+
+pub fn handle_remove_belt_requests(
+    mut events: EventReader<FromClient<RemoveBeltRequest>>,
+    mut commands: Commands,
+    belts_q: Query<(Entity, &Transform, &BeltTile)>,
+) {
+    for FromClient { event, .. } in events.read() {
+        let target = event.tile;
+        for (e, xf, bt) in belts_q.iter() {
+            let pos = world_to_tile(xf.translation.truncate());
+            if pos != target { continue }
+
+            if let Some(item) = bt.item {
+                let center = tile_center_world(pos);
+                commands.spawn((
+                    OreDrop { item },
+                    Sprite {
+                        color: item_color(item),
+                        custom_size: Some(Vec2::splat(6.0)),
+                        ..default()
+                    },
+                    Transform::from_translation(center.extend(4.0)),
+                    Replicated,
+                ));
+            }
+            commands.entity(e).despawn();
+            break;
+        }
+    }
 }
