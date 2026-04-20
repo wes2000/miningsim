@@ -7,6 +7,11 @@ use crate::tools::Tool;
 #[derive(Component, Serialize, Deserialize)]
 pub struct Player;
 
+/// Visual marker for the translucent belt sprite shown at the cursor while in
+/// build mode (M5a). Always exactly zero or one of these in the world.
+#[derive(Component)]
+pub struct BeltGhost;
+
 /// The player entity controlled by this client. Exactly one in any session.
 #[derive(Component)]
 pub struct LocalPlayer;

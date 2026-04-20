@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use bevy::math::IVec2;
+use miningsim::belt::{BeltDir, BeltTile};
 use miningsim::economy::Money;
 use miningsim::grid::{Grid, Layer, Tile};
 use miningsim::inventory::Inventory;
@@ -36,6 +38,7 @@ fn sample_save_data() -> SaveData {
         owned_tools,
         smelter,
         player_pos: [200.0, -75.0],
+        belts: Vec::new(),
     }
 }
 
@@ -66,6 +69,7 @@ fn collect_round_trips_state() {
         &data_a.owned_tools,
         &data_a.smelter,
         data_a.player_pos,
+        data_a.belts.clone(),
     );
     assert_eq!(collected.money.0, data_a.money.0);
     assert_eq!(collected.player_pos, data_a.player_pos);
@@ -163,6 +167,39 @@ fn owned_tools_round_trip() {
     assert!(owned2.0.contains(&Tool::Pickaxe));
     assert!(owned2.0.contains(&Tool::Jackhammer));
     assert!(!owned2.0.contains(&Tool::Dynamite));
+}
+
+#[test]
+fn belts_round_trip_via_ron() {
+    let mut data = sample_save_data();
+    data.belts = vec![
+        (IVec2::new(3, 5), BeltTile { item: Some(ItemKind::Ore(OreKind::Copper)), dir: BeltDir::East }),
+        (IVec2::new(4, 5), BeltTile { item: None, dir: BeltDir::North }),
+    ];
+    let s = save::serialize_ron(&data).expect("ser");
+    let parsed = save::deserialize_ron(&s).expect("de");
+    assert_eq!(parsed.belts.len(), 2);
+    assert_eq!(parsed.belts[0].0, IVec2::new(3, 5));
+    assert_eq!(parsed.belts[0].1.item, Some(ItemKind::Ore(OreKind::Copper)));
+    assert_eq!(parsed.belts[0].1.dir, BeltDir::East);
+}
+
+#[test]
+fn belts_empty_default_round_trips() {
+    let data = sample_save_data();
+    assert_eq!(data.belts.len(), 0);
+    let s = save::serialize_ron(&data).expect("ser");
+    let parsed = save::deserialize_ron(&s).expect("de");
+    assert_eq!(parsed.belts.len(), 0);
+}
+
+#[test]
+fn version_3_rejects_v2_saves() {
+    let mut data = sample_save_data();
+    data.version = 2;
+    let s = save::serialize_ron(&data).expect("ser");
+    let result = save::deserialize_ron(&s);
+    assert!(matches!(result, Err(LoadError::VersionMismatch { found: 2, expected: 3 })));
 }
 
 #[test]

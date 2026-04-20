@@ -33,6 +33,7 @@ pub fn current_tool_display_name(t: Tool) -> &'static str {
         Tool::Pickaxe    => "Pickaxe",
         Tool::Jackhammer => "Jackhammer",
         Tool::Dynamite   => "Dynamite",
+        Tool::BeltUnlock => "Belt Networks",
     }
 }
 

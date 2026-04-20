@@ -1,4 +1,5 @@
 pub mod app;
+pub mod belt;
 pub mod components;
 pub mod coords;
 pub mod dig;

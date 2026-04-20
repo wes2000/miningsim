@@ -1,8 +1,10 @@
 use bevy::math::IVec2;
 
+use miningsim::belt::BeltDir;
 use miningsim::items::OreKind;
 use miningsim::systems::net_events::{
-    BuyToolRequest, CollectAllRequest, DigRequest, SellAllRequest, SmeltAllRequest,
+    BuyToolRequest, CollectAllRequest, DigRequest, PlaceBeltRequest, RemoveBeltRequest,
+    SellAllRequest, SmeltAllRequest,
 };
 use miningsim::tools::Tool;
 
@@ -43,4 +45,20 @@ fn sell_all_request_round_trips() {
     let original = SellAllRequest;
     let bytes = bincode::serialize(&original).expect("ser");
     let _decoded: SellAllRequest = bincode::deserialize(&bytes).expect("de");
+}
+
+#[test]
+fn place_belt_request_round_trips() {
+    let original = PlaceBeltRequest { tile: IVec2::new(7, 12), dir: BeltDir::North };
+    let bytes = bincode::serialize(&original).expect("ser");
+    let decoded: PlaceBeltRequest = bincode::deserialize(&bytes).expect("de");
+    assert_eq!(decoded, original);
+}
+
+#[test]
+fn remove_belt_request_round_trips() {
+    let original = RemoveBeltRequest { tile: IVec2::new(3, 0) };
+    let bytes = bincode::serialize(&original).expect("ser");
+    let decoded: RemoveBeltRequest = bincode::deserialize(&bytes).expect("de");
+    assert_eq!(decoded, original);
 }

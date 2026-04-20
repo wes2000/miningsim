@@ -13,6 +13,10 @@ pub enum Tool {
     Pickaxe,
     Jackhammer,
     Dynamite,
+    /// One-time unlock for the belt-network build mode (M5a). Not a dig tool;
+    /// `tool_tier` returns 0 so it never beats any layer's tier in
+    /// `clicks_required`. Excluded from `best_applicable_tool`'s candidate array.
+    BeltUnlock,
 }
 
 pub fn tool_tier(t: Tool) -> u8 {
@@ -21,6 +25,7 @@ pub fn tool_tier(t: Tool) -> u8 {
         Tool::Pickaxe => 2,
         Tool::Jackhammer => 3,
         Tool::Dynamite => 4,
+        Tool::BeltUnlock => 0,
     }
 }
 
