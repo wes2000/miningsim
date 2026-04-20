@@ -131,10 +131,19 @@ impl Plugin for MultiplayerPlugin {
         // after replicon applies inbound server-origin updates in PreUpdate.
         // Runs at the top of Update (InputSet::ReadInput) so gameplay systems
         // see the correct client-authoritative position.
+        //
+        // `run_if(client_connected)` is defensive belt-and-suspenders. The system's
+        // query already requires `AuthoritativeTransform`, which is only attached
+        // by the client-side `mark_local_player_on_arrival`, so the system no-ops
+        // on host/SP today. The guard makes that client-only intent explicit and
+        // prevents accidental future drift (e.g., if a refactor ever attaches
+        // `AuthoritativeTransform` to the host's LocalPlayer, this gate still
+        // prevents the restore from clamping the host's Transform).
         app.add_systems(
             Update,
             net_player::restore_local_transform_from_authoritative
-                .in_set(InputSet::ReadInput),
+                .in_set(InputSet::ReadInput)
+                .run_if(client_connected),
         );
     }
 }
