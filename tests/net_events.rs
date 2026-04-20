@@ -89,8 +89,11 @@ fn grid_snapshot_round_trips() {
     let original = GridSnapshot { grid: g };
     let bytes = bincode::serialize(&original).expect("ser");
     let decoded: GridSnapshot = bincode::deserialize(&bytes).expect("de");
-    assert_eq!(decoded.grid.get(1, 1).map(|t| t.solid), Some(false));
-    assert_eq!(decoded.grid.get(0, 0).map(|t| t.solid), Some(true));
+    assert_eq!(
+        decoded.grid.get(1, 1).copied(),
+        Some(Tile { solid: false, layer: Layer::Dirt, ore: None, damage: 0 })
+    );
+    assert_eq!(decoded.grid.get(0, 0).copied(), Some(Tile::default()));
     assert_eq!(decoded.grid.width(), 3);
     assert_eq!(decoded.grid.height(), 3);
 }

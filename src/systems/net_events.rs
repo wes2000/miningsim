@@ -3,6 +3,7 @@ use bevy::prelude::Event;
 use serde::{Deserialize, Serialize};
 
 use crate::belt::BeltDir;
+use crate::grid::{Grid, Tile};
 use crate::items::OreKind;
 use crate::tools::Tool;
 
@@ -46,7 +47,7 @@ pub struct RemoveBeltRequest {
 /// intact. After this, the client tracks Grid via `TileChanged` deltas.
 #[derive(Event, Serialize, Deserialize, Clone, Debug)]
 pub struct GridSnapshot {
-    pub grid: crate::grid::Grid,
+    pub grid: Grid,
 }
 
 /// Server → all clients. Broadcast after every successful tile mutation
@@ -56,5 +57,5 @@ pub struct GridSnapshot {
 #[derive(Event, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct TileChanged {
     pub pos: IVec2,
-    pub tile: crate::grid::Tile,
+    pub tile: Tile,
 }
