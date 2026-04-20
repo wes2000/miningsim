@@ -27,6 +27,12 @@ pub struct MiningSimPlugin;
 
 impl Plugin for MiningSimPlugin {
     fn build(&self, app: &mut App) {
+        // Ensure Events<ToClients<TileChanged>> exists in every NetMode.
+        // MultiplayerPlugin also registers this via `add_server_event`, but registering
+        // twice is a no-op. In SinglePlayer we need the resource for `dig_input_system`'s
+        // `EventWriter<ToClients<TileChanged>>` param even though no one is listening.
+        app.add_event::<bevy_replicon::prelude::ToClients<crate::systems::net_events::TileChanged>>();
+
         // Requires Res<NetMode> to be inserted before this plugin is added (see main.rs).
         app.add_systems(Startup, (
                 setup::setup_world,

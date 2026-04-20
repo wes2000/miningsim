@@ -137,6 +137,7 @@ pub fn dig_input_system(
     time: Res<Time>,
     net_mode: Res<crate::net::NetMode>,
     mut dig_writer: EventWriter<DigRequest>,
+    mut tile_writer: EventWriter<bevy_replicon::prelude::ToClients<crate::systems::net_events::TileChanged>>,  // NEW
 ) {
     let (Some(grid), Some(owned_tools)) = (grid, owned_tools) else { return };
     cooldown.0.tick(time.delta());
@@ -188,6 +189,16 @@ pub fn dig_input_system(
     match result.status {
         DigStatus::Broken | DigStatus::Damaged => {
             cooldown.0.reset();
+            // NEW: in Host mode, tell all clients about this tile change.
+            // (SinglePlayer skips — no clients to notify.)
+            if matches!(*net_mode, crate::net::NetMode::Host { .. }) {
+                if let Some(new_tile) = grid.get(target_tile.x, target_tile.y).copied() {
+                    tile_writer.send(bevy_replicon::prelude::ToClients {
+                        mode: bevy_replicon::prelude::SendMode::Broadcast,
+                        event: crate::systems::net_events::TileChanged { pos: target_tile, tile: new_tile },
+                    });
+                }
+            }
             // Mark owning chunk dirty.
             let chunk_coord = IVec2::new(
                 target_tile.x.div_euclid(CHUNK_TILES),

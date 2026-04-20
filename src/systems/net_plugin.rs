@@ -13,7 +13,8 @@ use crate::processing::{self, SmelterState};
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
 use crate::systems::hud::item_color;
 use crate::systems::net_events::{
-    BuyToolRequest, CollectAllRequest, DigRequest, SellAllRequest, SmeltAllRequest,
+    BuyToolRequest, CollectAllRequest, DigRequest, GridSnapshot, SellAllRequest,
+    SmeltAllRequest, TileChanged,
 };
 use crate::systems::net_player;
 use crate::systems::player::DIG_REACH_TILES;
@@ -51,6 +52,10 @@ impl Plugin for MultiplayerPlugin {
         app.add_client_event::<CollectAllRequest>(Channel::Ordered);
         app.add_client_event::<SellAllRequest>(Channel::Ordered);
 
+        // M5b server events — host-authoritative Grid sync.
+        app.add_server_event::<GridSnapshot>(Channel::Ordered);
+        app.add_server_event::<TileChanged>(Channel::Ordered);
+
         // Server-side request handlers. Run only when this app is acting as
         // the server (replicon's `server_running` condition). The host's own
         // local Player is NOT mutated here — the host UI/input keeps mutating
@@ -76,6 +81,7 @@ impl Plugin for MultiplayerPlugin {
         // entities are spawned/despawned, which only happens on the server side).
         app.add_observer(net_player::spawn_player_for_new_clients);
         app.add_observer(net_player::despawn_player_for_disconnected_clients);
+        app.add_observer(send_initial_grid_snapshot);
 
         // Client-side: tag arriving Players LocalPlayer/RemotePlayer + add Sprite.
         app.add_systems(
@@ -137,6 +143,7 @@ pub fn handle_dig_requests(
     mut commands: Commands,
     player_q: Query<(Entity, &OwningClient, &Transform, &OwnedTools), With<Player>>,
     chunks_q: Query<(Entity, &TerrainChunk)>,
+    mut tile_writer: EventWriter<ToClients<TileChanged>>,   // NEW
 ) {
     let mut grid = grid.into_inner();
     for FromClient { client_entity, event } in events.read() {
@@ -156,6 +163,14 @@ pub fn handle_dig_requests(
 
         let result = dig::try_dig(&mut grid, event.target, tool);
         if matches!(result.status, DigStatus::Broken | DigStatus::Damaged) {
+            // NEW: broadcast the new tile state to clients.
+            if let Some(new_tile) = grid.get(event.target.x, event.target.y).copied() {
+                tile_writer.send(ToClients {
+                    mode: SendMode::Broadcast,
+                    event: TileChanged { pos: event.target, tile: new_tile },
+                });
+            }
+            // Existing: mark the owning chunk dirty so chunk_render rebuilds the mesh.
             let chunk_coord = IVec2::new(
                 event.target.x.div_euclid(CHUNK_TILES),
                 event.target.y.div_euclid(CHUNK_TILES),
@@ -242,4 +257,25 @@ pub fn handle_sell_all_requests(
         let Ok((mut inv, mut money)) = inv_money_q.get_mut(e) else { continue };
         economy::sell_all(&mut inv, &mut money);
     }
+}
+
+/// Server observer: when a new client connects (replicon spawns an entity
+/// with `ConnectedClient`), send them the full current Grid via a one-shot
+/// `GridSnapshot` event. Runs only on the server (ConnectedClient entities
+/// only exist server-side).
+pub fn send_initial_grid_snapshot(
+    trigger: Trigger<OnAdd, ConnectedClient>,
+    grid_q: Query<&Grid>,
+    mut writer: EventWriter<ToClients<GridSnapshot>>,
+) {
+    let client_entity = trigger.entity();
+    let Ok(grid) = grid_q.get_single() else {
+        warn!("send_initial_grid_snapshot: Grid singleton missing; client {client_entity} will see no terrain");
+        return;
+    };
+    info!("sending initial grid snapshot to client {client_entity} ({}x{})", grid.width(), grid.height());
+    writer.send(ToClients {
+        mode: SendMode::Direct(client_entity),
+        event: GridSnapshot { grid: grid.clone() },
+    });
 }
