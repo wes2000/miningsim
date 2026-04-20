@@ -19,6 +19,11 @@
 //!                                       the host, replacing the local Grid singleton.
 //!   * `apply_tile_changed`            — client-side; apply incremental TileChanged deltas;
 //!                                       early-returns if the Grid doesn't exist yet.
+//!   * `send_local_position_system`    — client-side; 10 Hz send of LocalPlayer position
+//!                                       to the host via `ClientPositionUpdate`.
+//!   * `restore_local_transform_from_authoritative` — client-side; undo any inbound
+//!                                       Transform replication for LocalPlayer by
+//!                                       restoring from the local `AuthoritativeTransform`.
 //!   * `exit_on_host_disconnect`       — client-side; log + emit `AppExit` when the
 //!                                       host drops the connection.
 //!
@@ -420,6 +425,24 @@ pub fn apply_tile_changed(
                 break;
             }
         }
+    }
+}
+
+/// Client-side: after replicon applies replicated Transform updates in
+/// PreUpdate, restore the LocalPlayer's Transform from `AuthoritativeTransform`
+/// so inbound server-origin updates for our own player don't clobber our
+/// client-authoritative position. Runs on the Update schedule (in
+/// `InputSet::ReadInput`) — by then, PreUpdate (including
+/// `ClientSet::Receive`) is complete.
+pub fn restore_local_transform_from_authoritative(
+    mut q: Query<(&mut Transform, &AuthoritativeTransform), With<LocalPlayer>>,
+) {
+    let Ok((mut xf, auth)) = q.get_single_mut() else { return };
+    // Only write if there's an actual divergence. Bevy's change detection
+    // means an unconditional write would dirty Transform every frame,
+    // which could affect other Changed<Transform> filters elsewhere.
+    if xf.translation != auth.0 {
+        xf.translation = auth.0;
     }
 }
 

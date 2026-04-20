@@ -2,6 +2,8 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use bevy_replicon_renet::RepliconRenetPlugins;
 
+use crate::app::InputSet;
+
 use crate::components::{ChunkDirty, Facing, NetOwner, OreDrop, OwningClient, Player, Shop, Smelter, TerrainChunk};
 use crate::coords::{tile_center_world, world_to_tile};
 use crate::dig::{self, DigStatus};
@@ -124,6 +126,16 @@ impl Plugin for MultiplayerPlugin {
         // M5b: client-authoritative position sync.
         app.insert_resource(net_player::LocalPositionSyncTimer::default());
         app.add_systems(Update, net_player::send_local_position_system);
+
+        // M5b Task 8: restore LocalPlayer Transform from AuthoritativeTransform
+        // after replicon applies inbound server-origin updates in PreUpdate.
+        // Runs at the top of Update (InputSet::ReadInput) so gameplay systems
+        // see the correct client-authoritative position.
+        app.add_systems(
+            Update,
+            net_player::restore_local_transform_from_authoritative
+                .in_set(InputSet::ReadInput),
+        );
     }
 }
 
