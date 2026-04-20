@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy_replicon::prelude::*;
 use bevy_replicon_renet::RepliconRenetPlugins;
 
-use crate::components::{ChunkDirty, NetOwner, OreDrop, OwningClient, Player, Shop, Smelter, TerrainChunk};
+use crate::components::{ChunkDirty, Facing, NetOwner, OreDrop, OwningClient, Player, Shop, Smelter, TerrainChunk};
 use crate::coords::{tile_center_world, world_to_tile};
 use crate::dig::{self, DigStatus};
 use crate::economy::{self, Money};
@@ -13,8 +13,8 @@ use crate::processing::{self, SmelterState};
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
 use crate::systems::hud::item_color;
 use crate::systems::net_events::{
-    BuyToolRequest, CollectAllRequest, DigRequest, GridSnapshot, SellAllRequest,
-    SmeltAllRequest, TileChanged,
+    BuyToolRequest, ClientPositionUpdate, CollectAllRequest, DigRequest, GridSnapshot,
+    SellAllRequest, SmeltAllRequest, TileChanged,
 };
 use crate::systems::net_player;
 use crate::systems::player::DIG_REACH_TILES;
@@ -47,6 +47,7 @@ impl Plugin for MultiplayerPlugin {
         app.add_client_event::<SmeltAllRequest>(Channel::Ordered);
         app.add_client_event::<CollectAllRequest>(Channel::Ordered);
         app.add_client_event::<SellAllRequest>(Channel::Ordered);
+        app.add_client_event::<ClientPositionUpdate>(Channel::Unordered);
 
         // M5b server events — host-authoritative Grid sync.
         app.add_server_event::<GridSnapshot>(Channel::Ordered);
@@ -66,6 +67,7 @@ impl Plugin for MultiplayerPlugin {
                 handle_smelt_all_requests,
                 handle_collect_all_requests,
                 handle_sell_all_requests,
+                handle_client_position_updates,
             )
                 .run_if(server_running),
         );
@@ -254,6 +256,25 @@ pub fn handle_sell_all_requests(
         let Some(e) = player_entity_for_client(*client_entity, &player_q) else { continue };
         let Ok((mut inv, mut money)) = inv_money_q.get_mut(e) else { continue };
         economy::sell_all(&mut inv, &mut money);
+    }
+}
+
+/// Server-side: write the client's reported position onto its server-side
+/// Player Transform. Trust-based — we don't validate or speed-cap. Mutation
+/// triggers replicon's change detection, which broadcasts Transform updates
+/// to all OTHER clients via the existing `.replicate::<Transform>()`.
+pub fn handle_client_position_updates(
+    mut events: EventReader<FromClient<ClientPositionUpdate>>,
+    player_q: Query<(Entity, &OwningClient), With<Player>>,
+    mut xf_q: Query<(&mut Transform, &mut Facing), With<Player>>,
+) {
+    for FromClient { client_entity, event } in events.read() {
+        let Some(e) = player_entity_for_client(*client_entity, &player_q) else { continue };
+        let Ok((mut xf, mut facing)) = xf_q.get_mut(e) else { continue };
+        xf.translation.x = event.pos.x;
+        xf.translation.y = event.pos.y;
+        // Don't touch z; it was set at spawn and drives sprite layering.
+        facing.0 = event.facing;
     }
 }
 

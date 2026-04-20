@@ -59,3 +59,16 @@ pub struct TileChanged {
     pub pos: IVec2,
     pub tile: Tile,
 }
+
+// ---------- Client events (client → server) added in M5b ----------
+
+/// Client → server. Fired at `POSITION_SYNC_HZ` (see `net_player.rs`) to
+/// keep the server's view of this client's player position current. Used
+/// for dig-reach validation and replication to OTHER clients via
+/// `.replicate::<Transform>()`. Unordered because later packets should
+/// supersede earlier ones — we want newest position to win.
+#[derive(Event, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ClientPositionUpdate {
+    pub pos: bevy::math::Vec2,
+    pub facing: IVec2,
+}

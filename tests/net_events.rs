@@ -4,8 +4,8 @@ use miningsim::belt::BeltDir;
 use miningsim::grid::{Grid, Layer, Tile};
 use miningsim::items::OreKind;
 use miningsim::systems::net_events::{
-    BuyToolRequest, CollectAllRequest, DigRequest, GridSnapshot, PlaceBeltRequest,
-    RemoveBeltRequest, SellAllRequest, SmeltAllRequest, TileChanged,
+    BuyToolRequest, ClientPositionUpdate, CollectAllRequest, DigRequest, GridSnapshot,
+    PlaceBeltRequest, RemoveBeltRequest, SellAllRequest, SmeltAllRequest, TileChanged,
 };
 use miningsim::tools::Tool;
 
@@ -96,4 +96,15 @@ fn grid_snapshot_round_trips() {
     assert_eq!(decoded.grid.get(0, 0).copied(), Some(Tile::default()));
     assert_eq!(decoded.grid.width(), 3);
     assert_eq!(decoded.grid.height(), 3);
+}
+
+#[test]
+fn client_position_update_round_trips() {
+    let original = ClientPositionUpdate {
+        pos: bevy::math::Vec2::new(123.5, -47.25),
+        facing: IVec2::new(1, 0),
+    };
+    let bytes = bincode::serialize(&original).expect("ser");
+    let decoded: ClientPositionUpdate = bincode::deserialize(&bytes).expect("de");
+    assert_eq!(decoded, original);
 }
