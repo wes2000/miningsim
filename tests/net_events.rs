@@ -1,10 +1,11 @@
 use bevy::math::IVec2;
 
 use miningsim::belt::BeltDir;
+use miningsim::grid::{Grid, Layer, Tile};
 use miningsim::items::OreKind;
 use miningsim::systems::net_events::{
-    BuyToolRequest, CollectAllRequest, DigRequest, PlaceBeltRequest, RemoveBeltRequest,
-    SellAllRequest, SmeltAllRequest,
+    BuyToolRequest, CollectAllRequest, DigRequest, GridSnapshot, PlaceBeltRequest,
+    RemoveBeltRequest, SellAllRequest, SmeltAllRequest, TileChanged,
 };
 use miningsim::tools::Tool;
 
@@ -61,4 +62,35 @@ fn remove_belt_request_round_trips() {
     let bytes = bincode::serialize(&original).expect("ser");
     let decoded: RemoveBeltRequest = bincode::deserialize(&bytes).expect("de");
     assert_eq!(decoded, original);
+}
+
+// ---------- M5b server events (Grid delta replication) ----------
+
+#[test]
+fn tile_changed_round_trips() {
+    let original = TileChanged {
+        pos: IVec2::new(12, 40),
+        tile: Tile {
+            solid: false,
+            layer: Layer::Stone,
+            ore: Some(OreKind::Copper),
+            damage: 2,
+        },
+    };
+    let bytes = bincode::serialize(&original).expect("ser");
+    let decoded: TileChanged = bincode::deserialize(&bytes).expect("de");
+    assert_eq!(decoded, original);
+}
+
+#[test]
+fn grid_snapshot_round_trips() {
+    let mut g = Grid::new(3, 3);
+    g.set(1, 1, Tile { solid: false, layer: Layer::Dirt, ore: None, damage: 0 });
+    let original = GridSnapshot { grid: g };
+    let bytes = bincode::serialize(&original).expect("ser");
+    let decoded: GridSnapshot = bincode::deserialize(&bytes).expect("de");
+    assert_eq!(decoded.grid.get(1, 1).map(|t| t.solid), Some(false));
+    assert_eq!(decoded.grid.get(0, 0).map(|t| t.solid), Some(true));
+    assert_eq!(decoded.grid.width(), 3);
+    assert_eq!(decoded.grid.height(), 3);
 }
