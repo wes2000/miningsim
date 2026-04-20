@@ -121,6 +121,9 @@ impl Plugin for MultiplayerPlugin {
         // the connection is lost.
         app.add_systems(Update, net_player::exit_on_host_disconnect);
 
+        // M5b: client-authoritative position sync.
+        app.insert_resource(net_player::LocalPositionSyncTimer::default());
+        app.add_systems(Update, net_player::send_local_position_system);
     }
 }
 

@@ -49,7 +49,7 @@ use crate::economy::Money;
 use crate::grid::Grid;
 use crate::inventory::Inventory;
 use crate::net::NetMode;
-use crate::systems::net_events::{GridSnapshot, TileChanged};
+use crate::systems::net_events::{ClientPositionUpdate, GridSnapshot, TileChanged};
 use crate::tools::OwnedTools;
 
 /// Arbitrary game identifier — both ends MUST agree. ASCII "MINING_1".
@@ -65,6 +65,23 @@ const PLAYER_SPRITE_SIZE: f32 = 12.0;
 /// would mis-tag the host's player as local on a client whose `as_millis()`
 /// happened to return 0, or on a tester that passed 0 explicitly).
 pub const HOST_NET_OWNER: u64 = u64::MAX;
+
+/// How often the client ships its authoritative position to the host.
+/// 10 Hz = one packet every 100 ms. At max player speed (120 px/s) that's
+/// ~12 px = <1 tile of position staleness on the host side — well within
+/// `DIG_REACH_TILES = 2.0`'s slack.
+pub const POSITION_SYNC_HZ: f32 = 10.0;
+
+/// Timer driving `send_local_position_system`. Inserted unconditionally in
+/// `MultiplayerPlugin::build`; the system itself no-ops in non-Client modes.
+#[derive(Resource)]
+pub struct LocalPositionSyncTimer(pub Timer);
+
+impl Default for LocalPositionSyncTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(1.0 / POSITION_SYNC_HZ, TimerMode::Repeating))
+    }
+}
 
 /// Transport setup. Runs once at Startup. NetMode::SinglePlayer is a no-op
 /// (the MultiplayerPlugin isn't even loaded in that case, but be defensive).
@@ -404,4 +421,32 @@ pub fn apply_tile_changed(
             }
         }
     }
+}
+
+/// Client-side: every `POSITION_SYNC_HZ` ticks, ship our LocalPlayer's
+/// Transform + Facing to the host via `ClientPositionUpdate`. Gated on
+/// `NetMode::Client` internally rather than via `.run_if(...)` so the
+/// system exists in the schedule in Host mode too (where it no-ops) —
+/// avoids the registration divergence between modes. Follows the same
+/// pattern as `exit_on_host_disconnect`.
+pub fn send_local_position_system(
+    time: Res<Time>,
+    mut timer: ResMut<LocalPositionSyncTimer>,
+    net_mode: Res<NetMode>,
+    player_q: Option<Single<(&Transform, &Facing), With<LocalPlayer>>>,
+    mut writer: EventWriter<ClientPositionUpdate>,
+) {
+    if !matches!(*net_mode, NetMode::Client { .. }) {
+        return;
+    }
+    timer.0.tick(time.delta());
+    if !timer.0.just_finished() {
+        return;
+    }
+    let Some(p) = player_q else { return }; // LocalPlayer not tagged yet
+    let (xf, facing) = p.into_inner();
+    writer.send(ClientPositionUpdate {
+        pos: xf.translation.truncate(),
+        facing: facing.0,
+    });
 }
