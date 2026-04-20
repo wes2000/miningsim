@@ -1,4 +1,4 @@
-use bevy::math::IVec2;
+use bevy::math::{IVec2, Vec2};
 
 use miningsim::belt::BeltDir;
 use miningsim::grid::{Grid, Layer, Tile};
@@ -101,7 +101,7 @@ fn grid_snapshot_round_trips() {
 #[test]
 fn client_position_update_round_trips() {
     let original = ClientPositionUpdate {
-        pos: bevy::math::Vec2::new(123.5, -47.25),
+        pos: Vec2::new(123.5, -47.25),
         facing: IVec2::new(1, 0),
     };
     let bytes = bincode::serialize(&original).expect("ser");

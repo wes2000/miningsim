@@ -47,7 +47,7 @@ impl Plugin for MultiplayerPlugin {
         app.add_client_event::<SmeltAllRequest>(Channel::Ordered);
         app.add_client_event::<CollectAllRequest>(Channel::Ordered);
         app.add_client_event::<SellAllRequest>(Channel::Ordered);
-        app.add_client_event::<ClientPositionUpdate>(Channel::Unordered);
+        app.add_client_event::<ClientPositionUpdate>(Channel::Unreliable);
 
         // M5b server events — host-authoritative Grid sync.
         app.add_server_event::<GridSnapshot>(Channel::Ordered);

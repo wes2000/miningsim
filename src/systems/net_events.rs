@@ -1,4 +1,4 @@
-use bevy::math::IVec2;
+use bevy::math::{IVec2, Vec2};
 use bevy::prelude::Event;
 use serde::{Deserialize, Serialize};
 
@@ -65,10 +65,12 @@ pub struct TileChanged {
 /// Client → server. Fired at `POSITION_SYNC_HZ` (see `net_player.rs`) to
 /// keep the server's view of this client's player position current. Used
 /// for dig-reach validation and replication to OTHER clients via
-/// `.replicate::<Transform>()`. Unordered because later packets should
-/// supersede earlier ones — we want newest position to win.
+/// `.replicate::<Transform>()`. Uses `Channel::Unreliable` because
+/// position updates are supersedable — dropping a packet is cheaper
+/// than retransmitting a stale position (the next 100 ms tick will
+/// carry current truth anyway).
 #[derive(Event, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ClientPositionUpdate {
-    pub pos: bevy::math::Vec2,
+    pub pos: Vec2,
     pub facing: IVec2,
 }
