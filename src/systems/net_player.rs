@@ -18,6 +18,10 @@
 //!   * `mark_chunks_dirty_on_grid_change` — when Grid mutates (notably from a remote
 //!                                       host's dig replicating to a client), flag every
 //!                                       TerrainChunk so chunk_render rebuilds it.
+//!   * `apply_grid_snapshot`           — client-side; apply a one-shot GridSnapshot from
+//!                                       the host, replacing the local Grid singleton.
+//!   * `apply_tile_changed`            — client-side; apply incremental TileChanged deltas;
+//!                                       early-returns if the Grid doesn't exist yet.
 //!   * `exit_on_host_disconnect`       — client-side; log + emit `AppExit` when the
 //!                                       host drops the connection.
 //!
@@ -48,6 +52,7 @@ use crate::economy::Money;
 use crate::grid::Grid;
 use crate::inventory::Inventory;
 use crate::net::NetMode;
+use crate::systems::net_events::{GridSnapshot, TileChanged};
 use crate::tools::OwnedTools;
 
 /// Arbitrary game identifier — both ends MUST agree. ASCII "MINING_1".
@@ -378,8 +383,8 @@ pub fn mark_chunks_dirty_on_grid_change(
 /// where a second snapshot arrives).
 pub fn apply_grid_snapshot(
     mut commands: Commands,
-    mut events: EventReader<crate::systems::net_events::GridSnapshot>,
-    existing_grid: Query<Entity, With<crate::grid::Grid>>,
+    mut events: EventReader<GridSnapshot>,
+    existing_grid: Query<Entity, With<Grid>>,
     chunks: Query<Entity, With<TerrainChunk>>,
 ) {
     for event in events.read() {
@@ -402,8 +407,8 @@ pub fn apply_grid_snapshot(
 /// pre-snapshot events are already reflected in the snapshot that's arriving.
 pub fn apply_tile_changed(
     mut commands: Commands,
-    mut events: EventReader<crate::systems::net_events::TileChanged>,
-    mut grid_q: Query<&mut crate::grid::Grid>,
+    mut events: EventReader<TileChanged>,
+    mut grid_q: Query<&mut Grid>,
     chunks_q: Query<(Entity, &TerrainChunk)>,
 ) {
     let Ok(mut grid) = grid_q.get_single_mut() else {
