@@ -58,6 +58,15 @@ pub fn read_input_system(
 
 pub fn apply_velocity_system(
     time: Res<Time>,
+    // `With<Player>` matches every Player entity — host's own LocalPlayer, the
+    // host-side mirror of each remote client's Player, and client-side
+    // LocalPlayer/RemotePlayer. Only those with `Velocity` are iterated. The
+    // host-side mirrors of remote players are spawned without `Velocity` (see
+    // `spawn_player_for_new_clients` in net_player.rs), so they're excluded —
+    // their Transform is driven by the `handle_client_position_updates`
+    // handler, not local integration. The `Option<&mut AuthoritativeTransform>`
+    // tracks client-LocalPlayer only; host/SP players lack the component and
+    // silently no-op.
     mut q: Query<(&Velocity, &mut Transform, Option<&mut AuthoritativeTransform>), With<Player>>,
 ) {
     let dt = time.delta_secs();
