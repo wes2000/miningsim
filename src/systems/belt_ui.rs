@@ -149,8 +149,6 @@ pub fn belt_place_system(
     belts_q: Query<&Transform, With<BeltTile>>,
     shops_q: Query<&Transform, With<Shop>>,
     smelters_q: Query<&Transform, With<Smelter>>,
-    net_mode: Res<crate::net::NetMode>,
-    mut place_writer: EventWriter<crate::systems::net_events::PlaceBeltRequest>,
 ) {
     let Some(dir) = build_mode.cursor_dir else { return };
     if !mouse.just_pressed(MouseButton::Left) { return }
@@ -161,21 +159,12 @@ pub fn belt_place_system(
     let Ok(cursor_world) = cam.viewport_to_world_2d(cam_xf, cursor_screen) else { return };
     let tile = world_to_tile(cursor_world);
 
-    if matches!(*net_mode, crate::net::NetMode::Client { .. }) {
-        place_writer.send(crate::systems::net_events::PlaceBeltRequest { tile, dir });
-        return;
-    }
-
     let Some(grid) = grid_q else { return };
     let grid = grid.into_inner();
-    let in_bounds_and_floor = grid.get(tile.x, tile.y).is_some_and(|g| !g.solid);
-    let occupied: std::collections::HashSet<bevy::math::IVec2> = belts_q
-        .iter()
-        .chain(shops_q.iter())
-        .chain(smelters_q.iter())
-        .map(|xf| world_to_tile(xf.translation.truncate()))
-        .collect();
-    if !belt::can_place_belt(tile, in_bounds_and_floor, &occupied) { return }
+
+    if !validate_belt_placement(tile, grid, &belts_q, &shops_q, &smelters_q) {
+        return;
+    }
 
     let center = tile_center_world(tile);
     commands.spawn((
@@ -187,7 +176,7 @@ pub fn belt_place_system(
             ..default()
         },
         Transform::from_translation(center.extend(3.0)),
-        bevy_replicon::prelude::Replicated,
+        bevy_replicon::prelude::Replicated,  // inert in single-player; needed in Host mode
     ));
 }
 
@@ -198,8 +187,6 @@ pub fn belt_remove_system(
     win_q: Query<&Window, With<PrimaryWindow>>,
     cam_q: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     belts_q: Query<(Entity, &Transform, &BeltTile)>,
-    net_mode: Res<crate::net::NetMode>,
-    mut remove_writer: EventWriter<crate::systems::net_events::RemoveBeltRequest>,
 ) {
     if build_mode.cursor_dir.is_none() { return }
     if !mouse.just_pressed(MouseButton::Right) { return }
@@ -209,11 +196,6 @@ pub fn belt_remove_system(
     let Ok((cam, cam_xf)) = cam_q.get_single() else { return };
     let Ok(cursor_world) = cam.viewport_to_world_2d(cam_xf, cursor_screen) else { return };
     let target = world_to_tile(cursor_world);
-
-    if matches!(*net_mode, crate::net::NetMode::Client { .. }) {
-        remove_writer.send(crate::systems::net_events::RemoveBeltRequest { tile: target });
-        return;
-    }
 
     for (e, xf, belt_tile) in belts_q.iter() {
         let pos = world_to_tile(xf.translation.truncate());
@@ -233,6 +215,24 @@ pub fn belt_remove_system(
         commands.entity(e).despawn();
         return;
     }
+}
+
+fn validate_belt_placement(
+    tile: bevy::math::IVec2,
+    grid: &Grid,
+    belts_q: &Query<&Transform, With<BeltTile>>,
+    shops_q: &Query<&Transform, With<Shop>>,
+    smelters_q: &Query<&Transform, With<Smelter>>,
+) -> bool {
+    let Some(g) = grid.get(tile.x, tile.y) else { return false };
+    if g.solid { return false }
+    for xf in belts_q.iter() {
+        if world_to_tile(xf.translation.truncate()) == tile { return false }
+    }
+    for xf in shops_q.iter().chain(smelters_q.iter()) {
+        if world_to_tile(xf.translation.truncate()) == tile { return false }
+    }
+    true
 }
 
 pub fn belt_visual_recompute_system(

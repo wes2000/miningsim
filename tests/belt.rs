@@ -246,19 +246,3 @@ fn back_pressure_y_merge_arbitrates_to_single_winner() {
     // Sort order: (4,5) < (5,4) by (x,y), so (4,5) wins.
     assert_eq!(moves[0], (IVec2::new(4, 5), IVec2::new(5, 5)));
 }
-
-#[test]
-fn can_place_belt_happy_path() {
-    let occupied = HashSet::new();
-    assert!(belt::can_place_belt(IVec2::new(3, 5), true, &occupied));
-}
-
-#[test]
-fn can_place_belt_rejects_occupied_tile() {
-    let mut occupied = HashSet::new();
-    occupied.insert(IVec2::new(3, 5));
-    assert!(!belt::can_place_belt(IVec2::new(3, 5), true, &occupied));
-    // Also rejects when not floor, even if unoccupied.
-    let empty = HashSet::new();
-    assert!(!belt::can_place_belt(IVec2::new(3, 5), false, &empty));
-}

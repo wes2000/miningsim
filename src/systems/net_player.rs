@@ -319,37 +319,6 @@ pub fn add_ore_drop_visuals_on_arrival(
     }
 }
 
-/// Replicon doesn't ship `Sprite` or the derived `BeltVisual` over the wire.
-/// Attach both locally when a BeltTile entity arrives via replication. The
-/// `Without<Sprite>` filter keeps this a no-op on the host (local placements
-/// spawn with Sprite already attached).
-pub fn add_belt_visuals_on_arrival(
-    mut commands: Commands,
-    new_belts: Query<(Entity, &crate::belt::BeltTile), (Added<crate::belt::BeltTile>, Without<Sprite>)>,
-) {
-    for (e, bt) in new_belts.iter() {
-        let color = belt_color_for_dir(bt.dir);
-        commands.entity(e).insert((
-            Sprite {
-                color,
-                custom_size: Some(Vec2::splat(crate::coords::TILE_SIZE_PX)),
-                ..default()
-            },
-            crate::belt::BeltVisual::Straight,
-        ));
-    }
-}
-
-fn belt_color_for_dir(dir: crate::belt::BeltDir) -> Color {
-    use crate::belt::BeltDir;
-    match dir {
-        BeltDir::North => Color::srgb(0.20, 0.55, 0.20),
-        BeltDir::East  => Color::srgb(0.60, 0.55, 0.20),
-        BeltDir::South => Color::srgb(0.55, 0.20, 0.20),
-        BeltDir::West  => Color::srgb(0.20, 0.20, 0.55),
-    }
-}
-
 /// Client-side: detect host disconnect and exit the app cleanly.
 ///
 /// Polls the renet client connection state each frame. When it transitions
