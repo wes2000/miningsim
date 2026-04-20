@@ -625,6 +625,125 @@ reverted commit stays in git history for reference.
   `PlaceBeltRequest`/`RemoveBeltRequest` handlers + client
   `add_belt_visuals_on_arrival`) is ready to re-land as-is.
 
+## Playtest Results — Milestone 5b (2026-04-20)
+
+Multiplayer foundation rework — fixed the two pre-existing M4 networking
+bugs surfaced by M5a smoke #3, then re-landed M5a Task 10 (belt
+multiplayer) on the repaired foundation. Smoke #3 (two-window co-op)
+finally passes end-to-end: both players see each other move, both see
+terrain changes as they happen, both place/use belts together.
+
+**Grid delta replication.** Dropped `.replicate::<Grid>()` in favor of
+two reliable-channel server events: `GridSnapshot` (fired once per
+client connect via `OnAdd, ConnectedClient` observer, carries the full
+grid) and `TileChanged { pos, tile }` (broadcast after every successful
+`try_dig` call, both from the server-side `handle_dig_requests` and from
+the host's local dig path in `dig_input_system`). Per-dig bandwidth
+dropped from ~80 KB over unreliable UDP to ~16 bytes over reliable
+ordered — a 5,000× reduction. The "53 fragments" warning spam from M5a
+smoke #3 is gone. Clients also see each other's digs within one frame.
+
+**Client-authoritative Transform.** Added `ClientPositionUpdate` client
+event at 10 Hz (100 ms), `Channel::Unreliable` — drop-tolerant because
+each packet supersedes the last. Host's `handle_client_position_updates`
+writes the reported position onto the server-side Player's Transform +
+Facing. Added `AuthoritativeTransform(Vec3)` client-local component
+attached to LocalPlayer on arrival; `apply_velocity_system` and
+`collide_player_with_grid_system` keep it in lockstep with Transform;
+`restore_local_transform_from_authoritative` runs in `InputSet::ReadInput`
+to clobber any inbound server-origin Transform replication for self.
+Client movement stays responsive; host's view of each client is
+accurate within ~100 ms, well inside `DIG_REACH_TILES = 2.0` slack.
+Reach check is now authoritative.
+
+**Bug surfaced by smoke #B that the plan missed.** The server-side
+remote Player entity (spawned by `spawn_player_for_new_clients`) had
+no `Facing` component — the handler's query required `&mut Facing`,
+so `get_mut(e)` silently failed and positions never updated. Fixed by
+adding `Facing::default()` to the spawn bundle + making the handler
+tolerant of missing Facing via `Option<&mut Facing>`, plus two
+integration tests (`tests/net_player.rs`) covering both paths.
+Separately, the spawn bundle also needed the `RemotePlayer` tag +
+`Sprite` client-side-style so the HOST window renders the joining
+player (host has no `mark_local_player_on_arrival` equivalent since
+that's gated on `client_connected`).
+
+**Belt MP re-landed.** Task 10's reverted commit cherry-picked with
+standard conflicts (import lists, handler tuples) that resolved by
+taking both sides. Replication registration (`.replicate::<BeltTile>()`),
+server handlers (`handle_place_belt_requests`,
+`handle_remove_belt_requests`), client branching in `belt_place_system`
+and `belt_remove_system` (`NetMode::Client` fires events instead of
+mutating), and `add_belt_visuals_on_arrival` client-side sprite
+attachment all landed cleanly on the repaired foundation.
+
+Test count: **131 passing** (124 post-M5a + 3 new serde round-trip +
+2 `can_place_belt` unit tests re-landed from the cherry-pick + 2 new
+`handle_client_position_updates` integration tests added mid-flight).
+
+**What felt good:**
+- Delta replication is the right shape for mutation-heavy spatial
+  state. The `GridSnapshot` + `TileChanged` pair generalizes
+  naturally to any future grid-like data (machine networks, pipe
+  layouts, circuits). Task 5+6+7+8 together introduced no new
+  snowflake patterns — just events + components + systems Bevy-style.
+- The `AuthoritativeTransform` stash + `restore_in_ReadInput` pattern
+  is ~15 lines of client-side logic and entirely self-contained.
+  No replicon visibility API needed; we don't fight replicon's
+  host → client direction, we just overwrite downstream.
+- Client-authoritative Transform with trust model matches M4's stated
+  "friends, not strangers" posture. No anti-cheat machinery needed.
+- Catching the channel-choice bug (`Channel::Unordered` → `Channel::Unreliable`)
+  in code review before smoke #C saved us from a subtle retransmit
+  burst under lossy links. The plan doc carried the same conceptual
+  error as the code; it got corrected in the commit but was never
+  back-ported to the plan file. Noting here as a reminder that plan
+  docs drift from the actual code once a milestone ships.
+- Smoke checkpoints #A / #B / #C gating between Parts 1 / 2 / 3
+  caught the Facing bug at exactly the right moment (after Part 2
+  was supposed to have fixed movement), not conflated with Part 3's
+  belt work.
+
+**What felt off (and was fixed mid-flight):**
+- Plan's initial channel choice (`Channel::Unordered`) was wrong —
+  that's reliable-unordered, which retransmits. Position updates
+  should be `Unreliable` (UDP, drop-tolerant). Caught in Task 5 code
+  review.
+- Plan's Task 6 drafted `AuthoritativeTransform(Vec3::ZERO)` with a
+  defensive zero-check in the restore system. Pivoted to seed from
+  the server-provided Transform in `mark_local_player_on_arrival`
+  (already reading the entity). Cleaner, no magic sentinel.
+- Plan didn't call out the `Facing` gap on server-side remote Player
+  entities. Surfaced mid-smoke-#B when digs still silently rejected
+  even after movement sync landed. Fix was two lines — `Facing::default()`
+  in the spawn bundle + `Option<&mut Facing>` in the handler — but
+  the hunt took enough time to log as a lesson.
+- Plan didn't call out that the HOST has no client-arrival path to
+  attach Sprite + RemotePlayer to the server-side remote Player entity.
+  Fixed in the same commit as the Facing bug, by adding both in
+  `spawn_player_for_new_clients` directly.
+
+**Decisions for M5c+:**
+- **Per-tile delta events are the default.** When adding any new
+  grid-like state (machine graphs, pipe networks, circuit layers),
+  register as `Initial<T>Snapshot` + `<T>Changed` server events.
+  Don't default to `.replicate::<T>()` for bulk spatial data.
+- **The `AuthoritativeTransform` pattern generalizes.** Any future
+  client-owned replicated component (custom hats, held items,
+  aiming direction) can use the same stash + restore approach if
+  bidirectional sync is needed.
+- **Server-side spawn bundles must carry every component that
+  server-side handlers read.** The Facing bug would have been caught
+  immediately if `spawn_player_for_new_clients` had been diffed
+  against `setup_world`'s host-spawn tuple — every component on one
+  should be on the other unless there's a deliberate reason. Consider
+  a shared helper or a doc comment invariant for M5c.
+- **Server-side remote entities need visual attachment too.**
+  Clients attach visuals on arrival; hosts must attach them on
+  local spawn. Any future server-spawned replicated entity that
+  needs to render on the host (NPCs, critters, physics debris)
+  should inline its Sprite + marker in the spawn bundle.
+
 ## What This Document Is Not
 
 - Not a spec. Specs live in `docs/superpowers/specs/` and are per-milestone.
