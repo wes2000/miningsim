@@ -28,11 +28,8 @@ impl Plugin for MultiplayerPlugin {
         app.add_plugins(RepliconRenetPlugins);
 
         // Replicated components — host writes, all clients read.
-        // Grid replicates as a Component on a singleton entity, spawned in
-        // setup_world with Replicated marker (Task 9.5). Replication ships a
-        // full Grid snapshot on every change (~MAP_W * MAP_H * sizeof(Tile)
-        // bytes ≈ 16 KB at 80x200). Acceptable at current scale; revisit with
-        // delta encoding if the map grows.
+        // Grid is NOT replicated here; it syncs via M5b GridSnapshot (full
+        // on connect) and TileChanged (per-dig delta) server events instead.
         app.replicate::<Player>()
             .replicate::<NetOwner>()
             .replicate::<Shop>()
@@ -40,7 +37,6 @@ impl Plugin for MultiplayerPlugin {
             .replicate::<SmelterState>()
             .replicate::<OreDrop>()
             .replicate::<Money>()
-            .replicate::<Grid>()
             .replicate::<Inventory>()
             .replicate::<OwnedTools>()
             .replicate::<Transform>();
@@ -123,15 +119,6 @@ impl Plugin for MultiplayerPlugin {
         // the connection is lost.
         app.add_systems(Update, net_player::exit_on_host_disconnect);
 
-        // When the singleton Grid changes via replication, re-mesh chunks.
-        // Client-only: on the host, `handle_dig_requests` already targets the
-        // specific chunk that changed, so a global re-dirty here is wasteful
-        // (every chunk re-meshed on every dig). Clients have no other
-        // re-mesh trigger for replicated Grid mutations, so we need it there.
-        app.add_systems(
-            Update,
-            net_player::mark_chunks_dirty_on_grid_change.run_if(client_connected),
-        );
     }
 }
 

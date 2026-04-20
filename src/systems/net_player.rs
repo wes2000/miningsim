@@ -15,9 +15,6 @@
 //!                                       entities (Sprite isn't carried by replicon).
 //!   * `add_smelter_visuals_on_arrival` — same, for Smelter.
 //!   * `add_ore_drop_visuals_on_arrival` — same, for OreDrop (per-item color).
-//!   * `mark_chunks_dirty_on_grid_change` — when Grid mutates (notably from a remote
-//!                                       host's dig replicating to a client), flag every
-//!                                       TerrainChunk so chunk_render rebuilds it.
 //!   * `apply_grid_snapshot`           — client-side; apply a one-shot GridSnapshot from
 //!                                       the host, replacing the local Grid singleton.
 //!   * `apply_tile_changed`            — client-side; apply incremental TileChanged deltas;
@@ -348,30 +345,6 @@ pub fn exit_on_host_disconnect(
         }
         exit.send(AppExit::Success);
         *already_logged = true;
-    }
-}
-
-/// When the singleton Grid changes (typically because the host's dig
-/// replicated to us as a client), flag every TerrainChunk dirty so
-/// chunk_render rebuilds them. On the host this also fires after local digs,
-/// but those tiles are already covered by the per-chunk dirtying inside
-/// `handle_dig_requests`/local dig — re-dirtying them is harmless (the chunk
-/// renderer is idempotent).
-// SCALING: re-meshes ALL chunks on every Grid change. Acceptable at 80x200
-// (~25 chunks), painful at 200x500. Future fix: switch to per-tile delta
-// events via `add_server_event` so clients can mark only the affected chunk
-// dirty instead of dirtying the world.
-pub fn mark_chunks_dirty_on_grid_change(
-    grid_q: Query<Ref<Grid>>,
-    chunks: Query<Entity, With<TerrainChunk>>,
-    mut commands: Commands,
-) {
-    let Ok(grid) = grid_q.get_single() else { return };
-    if !grid.is_changed() {
-        return;
-    }
-    for chunk in &chunks {
-        commands.entity(chunk).insert(ChunkDirty);
     }
 }
 
