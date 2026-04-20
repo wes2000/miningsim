@@ -436,10 +436,14 @@ pub fn send_local_position_system(
     player_q: Option<Single<(&Transform, &Facing), With<LocalPlayer>>>,
     mut writer: EventWriter<ClientPositionUpdate>,
 ) {
+    // Tick the timer unconditionally so it stays in sync even in non-Client
+    // modes. If we only ticked inside the Client gate, a reconnect flow that
+    // toggles through Host → Client could fire the first event instantly
+    // rather than waiting the full 100 ms.
+    timer.0.tick(time.delta());
     if !matches!(*net_mode, NetMode::Client { .. }) {
         return;
     }
-    timer.0.tick(time.delta());
     if !timer.0.just_finished() {
         return;
     }
