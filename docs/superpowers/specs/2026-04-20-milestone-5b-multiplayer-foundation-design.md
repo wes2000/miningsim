@@ -97,7 +97,10 @@ Both registered via `add_server_event::<T>(Channel::Ordered)` in `MultiplayerPlu
 
 #### Client-side changes
 
-- **New system `apply_grid_snapshot` in `net_player.rs`.** Reads `EventReader<GridSnapshot>`. On receipt, spawns the Grid entity: `commands.spawn((event.grid.clone(), ChunkDirty-enroll-all-visible-chunks))`. If a Grid singleton already exists (shouldn't, but defensive), replaces it.
+- **New system `apply_grid_snapshot` in `net_player.rs`.** Reads `EventReader<GridSnapshot>`. On receipt:
+  1. `commands.spawn(event.grid.clone())` — Grid becomes a singleton component on a fresh entity (no `Replicated` marker; never replicates back).
+  2. Iterate the existing `TerrainChunk` entities via a `Query<Entity, With<TerrainChunk>>` parameter and insert `ChunkDirty` on each so the next `chunk_render` pass rebuilds meshes from the new grid.
+  3. If a Grid singleton already exists (shouldn't on first snapshot, but defensive), despawn the old one before step 1.
 
 - **New system `apply_tile_changed` in `net_player.rs`.** Reads `EventReader<TileChanged>`. For each event:
   1. If the Grid singleton doesn't exist yet (snapshot not applied), early-return without consuming (or drain the reader — see "Edge cases"). The snapshot will bring the client current; stray pre-snapshot mutations are already in the snapshot by the time it's sent.
@@ -146,6 +149,8 @@ Registered `add_client_event::<ClientPositionUpdate>(Channel::Unordered)` in `Mu
 
 - **New system `send_local_position_system`** (gated internally on `NetMode::Client { .. }`; registered unconditionally in `MultiplayerPlugin`). Ticks timer, on finish sends `ClientPositionUpdate { pos, facing }` from the LocalPlayer's Transform + Facing. If LocalPlayer doesn't exist yet (pre-tagging), skip.
 
+  Note: this uses a different gating pattern than Part 1's `apply_grid_snapshot`/`apply_tile_changed`, which use `.run_if(client_connected)` at registration. Here we want the system to exist in host mode too (so the schedule doesn't diverge between modes), but to do nothing when the host runs it — hence the inline `NetMode::Client` check. Both patterns are idiomatic in this codebase; the choice follows the existing convention in `exit_on_host_disconnect` (gated internally because it needs to check `Option<Res<RenetClient>>`, not a replicon condition).
+
 - **New component `AuthoritativeTransform(Vec3)`** in `components.rs`. Not replicated. Attached to LocalPlayer during client-side tagging (`mark_local_player_on_arrival`).
 
 - **Modify `apply_velocity_system`** (in `player.rs`): when moving a LocalPlayer, also write the new translation to `AuthoritativeTransform`. For non-LocalPlayer entities with `Velocity` (there are none today; host-side remote Players don't get `Velocity`), ignore. This is a narrow mutation — the query adds `Option<&mut AuthoritativeTransform>` and conditionally updates.
@@ -190,6 +195,8 @@ Expected conflicts: `net_plugin.rs` will have collected new imports + handler re
 - `add_belt_visuals_on_arrival` client-side sprite attachment.
 
 **No new design required** — the work was done; it just needed the foundation repaired beneath it.
+
+**Cherry-pick fallback.** If `git cherry-pick a74b100` runs into non-trivial conflicts (e.g., one of Part 1/2's changes touched the same lines Task 10 touched in a way the three-way merge can't reconcile), abort the cherry-pick and reimplement Task 10 by hand from its diff (`git show a74b100`). The changes are small and self-contained — replication registration, 2 handlers, 1 client-side arrival system, a NetMode branch in belt_place/remove, and 2 tests — so manual re-apply is tractable. Either path should land the same final state; the commit message should note which path was used.
 
 **Verify after cherry-pick:** `cargo test` → 129 passing (124 current + 3 new serde + 2 re-landed `can_place_belt`). Build clean. Single-player belts (smoke #1, #2) still pass.
 
