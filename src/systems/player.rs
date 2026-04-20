@@ -7,7 +7,8 @@ use crate::grid::Grid;
 use crate::items::ItemKind;
 use crate::systems::chunk_lifecycle::CHUNK_TILES;
 use crate::systems::hud::item_color;
-use crate::systems::net_events::DigRequest;
+use crate::systems::net_events::{DigRequest, TileChanged};
+use bevy_replicon::prelude::{SendMode, ToClients};
 
 #[derive(Resource)]
 pub struct DigCooldown(pub Timer);
@@ -137,7 +138,7 @@ pub fn dig_input_system(
     time: Res<Time>,
     net_mode: Res<crate::net::NetMode>,
     mut dig_writer: EventWriter<DigRequest>,
-    mut tile_writer: EventWriter<bevy_replicon::prelude::ToClients<crate::systems::net_events::TileChanged>>,  // NEW
+    mut tile_writer: EventWriter<ToClients<TileChanged>>,
 ) {
     let (Some(grid), Some(owned_tools)) = (grid, owned_tools) else { return };
     cooldown.0.tick(time.delta());
@@ -193,9 +194,9 @@ pub fn dig_input_system(
             // (SinglePlayer skips — no clients to notify.)
             if matches!(*net_mode, crate::net::NetMode::Host { .. }) {
                 if let Some(new_tile) = grid.get(target_tile.x, target_tile.y).copied() {
-                    tile_writer.send(bevy_replicon::prelude::ToClients {
-                        mode: bevy_replicon::prelude::SendMode::Broadcast,
-                        event: crate::systems::net_events::TileChanged { pos: target_tile, tile: new_tile },
+                    tile_writer.send(ToClients {
+                        mode: SendMode::Broadcast,
+                        event: TileChanged { pos: target_tile, tile: new_tile },
                     });
                 }
             }
