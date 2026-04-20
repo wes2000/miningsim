@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use crate::belt::{self, BeltTile};
+use crate::components::OreDrop;
 use crate::coords::world_to_tile;
 
 pub const BELT_TICK_SECONDS: f32 = 1.0;
@@ -55,6 +56,33 @@ pub fn belt_tick_system(
     for (e, _, mut bt) in belts_q.iter_mut() {
         if let Some(&new_item) = new_item_for_entity.get(&e) {
             bt.item = new_item;
+        }
+    }
+}
+
+pub fn belt_pickup_system(
+    mut commands: Commands,
+    drops_q: Query<(Entity, &Transform, &OreDrop)>,
+    mut belts_q: Query<(&Transform, &mut BeltTile)>,
+) {
+    let mut available_tiles: HashSet<bevy::math::IVec2> = belts_q
+        .iter()
+        .filter(|(_, bt)| bt.item.is_none())
+        .map(|(xf, _)| world_to_tile(xf.translation.truncate()))
+        .collect();
+
+    for (drop_entity, drop_xf, drop_data) in drops_q.iter() {
+        let drop_tile = world_to_tile(drop_xf.translation.truncate());
+        if !available_tiles.contains(&drop_tile) { continue }
+
+        for (belt_xf, mut belt_tile) in belts_q.iter_mut() {
+            let pos = world_to_tile(belt_xf.translation.truncate());
+            if pos != drop_tile { continue }
+            if belt_tile.item.is_some() { break }
+            belt_tile.item = Some(drop_data.item);
+            commands.entity(drop_entity).despawn();
+            available_tiles.remove(&pos);
+            break;
         }
     }
 }
