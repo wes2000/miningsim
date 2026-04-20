@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use crate::components::{ChunkDirty, Facing, LocalPlayer, OreDrop, Player, TerrainChunk, Velocity};
+use crate::components::{AuthoritativeTransform, ChunkDirty, Facing, LocalPlayer, OreDrop, Player, TerrainChunk, Velocity};
 use crate::coords::{self, TILE_SIZE_PX};
 use crate::dig::{self, DigStatus};
 use crate::grid::Grid;
@@ -58,22 +58,25 @@ pub fn read_input_system(
 
 pub fn apply_velocity_system(
     time: Res<Time>,
-    mut q: Query<(&Velocity, &mut Transform), With<Player>>,
+    mut q: Query<(&Velocity, &mut Transform, Option<&mut AuthoritativeTransform>), With<Player>>,
 ) {
     let dt = time.delta_secs();
-    for (v, mut t) in q.iter_mut() {
+    for (v, mut t, auth) in q.iter_mut() {
         t.translation.x += v.0.x * dt;
         t.translation.y += v.0.y * dt;
+        if let Some(mut auth) = auth {
+            auth.0 = t.translation;
+        }
     }
 }
 
 pub fn collide_player_with_grid_system(
     grid: Option<Single<&Grid>>,
-    mut q: Query<&mut Transform, With<LocalPlayer>>,
+    mut q: Query<(&mut Transform, Option<&mut AuthoritativeTransform>), With<LocalPlayer>>,
 ) {
     let Some(grid) = grid else { return };
     let grid = grid.into_inner();
-    let Ok(mut t) = q.get_single_mut() else { return };
+    let Ok((mut t, auth)) = q.get_single_mut() else { return };
 
     // Resolve X then Y. Player AABB is [pos.xy ± PLAYER_HALF].
     // Convert world to tile coords. World y is negative-down; tile y is positive-down.
@@ -121,6 +124,9 @@ pub fn collide_player_with_grid_system(
                 }
             }
         }
+    }
+    if let Some(mut auth) = auth {
+        auth.0 = t.translation;
     }
 }
 

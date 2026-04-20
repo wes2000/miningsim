@@ -42,8 +42,8 @@ use bevy_replicon_renet::renet::{ConnectionConfig, RenetClient, RenetServer};
 use bevy_replicon_renet::RenetChannelsExt;
 
 use crate::components::{
-    ChunkDirty, Facing, LocalClientId, LocalPlayer, NetOwner, OwningClient, Player, RemotePlayer,
-    TerrainChunk, Velocity,
+    AuthoritativeTransform, ChunkDirty, Facing, LocalClientId, LocalPlayer, NetOwner, OwningClient,
+    Player, RemotePlayer, TerrainChunk, Velocity,
 };
 use crate::economy::Money;
 use crate::grid::Grid;
@@ -218,12 +218,12 @@ pub fn mark_local_player_on_arrival(
     mut commands: Commands,
     local_id: Option<Res<LocalClientId>>,
     arriving: Query<
-        (Entity, &NetOwner),
+        (Entity, &NetOwner, &Transform),
         (With<Player>, Without<LocalPlayer>, Without<RemotePlayer>),
     >,
 ) {
     let Some(local_id) = local_id else { return };
-    for (entity, owner) in &arriving {
+    for (entity, owner, xf) in &arriving {
         let is_local = owner.0 == local_id.0;
         let mut ec = commands.entity(entity);
         if is_local {
@@ -231,6 +231,7 @@ pub fn mark_local_player_on_arrival(
                 LocalPlayer,
                 Velocity::default(),
                 Facing::default(),
+                AuthoritativeTransform(xf.translation),   // seed from server spawn
                 Sprite {
                     color: LOCAL_PLAYER_COLOR,
                     custom_size: Some(Vec2::splat(PLAYER_SPRITE_SIZE)),

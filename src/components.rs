@@ -49,6 +49,17 @@ pub struct NetOwner(pub u64);
 #[derive(bevy::prelude::Resource, Debug, Clone, Copy)]
 pub struct LocalClientId(pub u64);
 
+/// Client-local authoritative Transform stash for LocalPlayer. Never
+/// replicated. The client's `apply_velocity_system` and
+/// `collide_player_with_grid_system` write this whenever they update
+/// the player's Transform; `restore_local_transform_from_authoritative`
+/// (added in Task 8) reads it to overwrite any inbound Transform
+/// replication for the LocalPlayer entity. Effectively makes Transform
+/// client-authoritative for self while keeping server-authoritative for
+/// remote players.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct AuthoritativeTransform(pub bevy::math::Vec3);
+
 #[derive(Component, Default)]
 pub struct Velocity(pub Vec2);
 
