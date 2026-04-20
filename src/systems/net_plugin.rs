@@ -298,15 +298,17 @@ pub fn handle_sell_all_requests(
 pub fn handle_client_position_updates(
     mut events: EventReader<FromClient<ClientPositionUpdate>>,
     player_q: Query<(Entity, &OwningClient), With<Player>>,
-    mut xf_q: Query<(&mut Transform, &mut Facing), With<Player>>,
+    mut xf_q: Query<(&mut Transform, Option<&mut Facing>), With<Player>>,
 ) {
     for FromClient { client_entity, event } in events.read() {
         let Some(e) = player_entity_for_client(*client_entity, &player_q) else { continue };
-        let Ok((mut xf, mut facing)) = xf_q.get_mut(e) else { continue };
+        let Ok((mut xf, facing)) = xf_q.get_mut(e) else { continue };
         xf.translation.x = event.pos.x;
         xf.translation.y = event.pos.y;
         // Don't touch z; it was set at spawn and drives sprite layering.
-        facing.0 = event.facing;
+        if let Some(mut facing) = facing {
+            facing.0 = event.facing;
+        }
     }
 }
 

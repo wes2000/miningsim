@@ -218,6 +218,7 @@ pub fn spawn_player_for_new_clients(
         RemotePlayer,
         OwningClient(client_entity),
         NetOwner(net_owner),
+        Facing::default(),
         Money::default(),
         Inventory::default(),
         OwnedTools::default(),
