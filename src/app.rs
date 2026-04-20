@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::systems::{belt_ui, camera, chunk_lifecycle, chunk_render, hud, ore_drop, player, setup, shop, shop_ui, smelter};
+use crate::systems::{belt as belt_sys, belt_ui, camera, chunk_lifecycle, chunk_render, hud, ore_drop, player, setup, shop, shop_ui, smelter};
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum InputSet { ReadInput, ApplyInput }
@@ -8,7 +8,17 @@ pub enum InputSet { ReadInput, ApplyInput }
 pub enum WorldSet { Collide, ChunkLifecycle, ChunkRender, Drops }
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
-pub enum MachineSet { ShopProximity, ShopUi, SmelterProximity, SmelterTick, SmelterUi }
+pub enum MachineSet {
+    ShopProximity,
+    SmelterProximity,
+    BeltPickup,
+    BeltSpillage,
+    BeltTick,
+    SmelterBeltIo,
+    SmelterTick,
+    ShopUi,
+    SmelterUi,
+}
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum UiSet { Hud, SaveLoad, Camera }
@@ -35,6 +45,10 @@ impl Plugin for MiningSimPlugin {
                 WorldSet::Collide,
                 MachineSet::ShopProximity,
                 MachineSet::SmelterProximity,
+                MachineSet::BeltPickup,
+                MachineSet::BeltSpillage,
+                MachineSet::BeltTick,
+                MachineSet::SmelterBeltIo,
                 MachineSet::SmelterTick,
                 MachineSet::ShopUi,
                 MachineSet::SmelterUi,
@@ -78,6 +92,8 @@ impl Plugin for MiningSimPlugin {
             // Build-mode UI (M5a Task 3). Local per-peer state; not gated on
             // NetMode here — placement/removal branch internally on Client mode
             // to fire request events instead of mutating directly (Task 10).
+            .insert_resource(belt_sys::BeltTickTimer::default())
+            .add_systems(Update, belt_sys::belt_tick_system.in_set(MachineSet::BeltTick))
             .insert_resource(belt_ui::BeltBuildMode::default())
             .add_systems(Update, (
                 belt_ui::belt_build_toggle_system,
