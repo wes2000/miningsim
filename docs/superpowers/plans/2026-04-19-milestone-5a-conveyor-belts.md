@@ -60,7 +60,7 @@ tests/
   economy.rs                   # no change expected
 ```
 
-Test count target: **~122 tests** (101 existing + 16 belt + 3 save + 2 net_events).
+Test count target: **~124 tests** (101 existing + 18 belt [16 from Task 1 + 2 can_place_belt from Task 10] + 3 save + 2 net_events).
 
 ---
 
@@ -887,12 +887,15 @@ fn validate_belt_placement(
 /// fine at MVP scale; revisit with neighbor-only invalidation if perf matters.
 pub fn belt_visual_recompute_system(
     changed_q: Query<(), Changed<BeltTile>>,
-    removed: RemovedComponents<BeltTile>,
+    mut removed: RemovedComponents<BeltTile>,
     mut belts_q: Query<(&Transform, &BeltTile, &mut BeltVisual)>,
     all_belts_q: Query<(&Transform, &BeltTile)>,
 ) {
-    // Skip if nothing changed and no belts were removed.
-    if changed_q.is_empty() && removed.is_empty() { return }
+    // Drain RemovedComponents events; track whether anything was removed.
+    // (RemovedComponents accumulates per-system in Bevy 0.15 — must drain.)
+    let any_removed = removed.read().next().is_some();
+    let _ = removed.read().count();   // drain remainder
+    if changed_q.is_empty() && !any_removed { return }
 
     use std::collections::BTreeMap;
     let map: BTreeMap<bevy::math::IVec2, BeltDir> = all_belts_q
@@ -1035,8 +1038,11 @@ pub fn belt_tick_system(
     timer.0.tick(time.delta());
     if !timer.0.just_finished() { return }
 
-    // Snapshot: build the (position → direction) map and (position → entity)
-    // index, plus the set of tiles currently holding an item.
+    // Snapshot. By the time this system runs, BeltSpillage has already run
+    // this tick — any item whose `next_tile` is off-graph has been spilled
+    // and the source belt cleared. So every item we see here has a
+    // belt-or-machine destination. We only apply moves whose destination IS
+    // another belt (machine consumption is handled by smelter_belt_io next).
     let mut belt_dirs: BTreeMap<bevy::math::IVec2, belt::BeltDir> = BTreeMap::new();
     let mut entity_at: BTreeMap<bevy::math::IVec2, Entity> = BTreeMap::new();
     let mut item_at: BTreeMap<bevy::math::IVec2, crate::items::ItemKind> = BTreeMap::new();
@@ -1050,50 +1056,28 @@ pub fn belt_tick_system(
     }
     let items_present: BTreeSet<bevy::math::IVec2> = item_at.keys().copied().collect();
 
-    // Pure helper computes the moves.
+    // Pure helper computes the moves. The helper may include moves whose
+    // destination is off-graph (spillage targets), but we filter those out
+    // below — spillage already ran this tick and consumed any such items.
     let moves = belt::compute_belt_advances(&belt_dirs, &items_present);
 
-    // Apply moves. We need to write to multiple BeltTile mutables; safest is
-    // to first compute a (entity, new_item) plan, then apply with a single
-    // iter_mut pass.
-    use std::collections::HashMap;
-    let mut new_item_for_entity: HashMap<Entity, Option<crate::items::ItemKind>> = HashMap::new();
-
+    // Build a writeback plan keyed by Entity. Only apply belt-to-belt moves.
+    let mut new_item_for_entity: BTreeMap<Entity, Option<crate::items::ItemKind>> = BTreeMap::new();
     for (from, to) in &moves {
+        // Skip off-graph destinations — those items already spilled this tick.
+        if !entity_at.contains_key(to) { continue }
         let item = item_at.get(from).copied();
         if let Some(item) = item {
             if let Some(&from_e) = entity_at.get(from) {
                 new_item_for_entity.insert(from_e, None);
             }
-            // Destination may be off the belt graph (spillage destination); only set if it's a belt.
             if let Some(&to_e) = entity_at.get(to) {
                 new_item_for_entity.insert(to_e, Some(item));
             }
-            // Spillage of items moving off-graph is handled by `belt_spillage_system`
-            // BEFORE this tick (see app.rs set ordering: BeltSpillage runs after
-            // BeltTick on the *previous* frame; or run order can be adjusted).
-            // For MVP simplicity: if the destination isn't a belt, simply leave the
-            // item on the source — `belt_spillage_system` will spill it on its next
-            // pass. That means a single dead-end belt's item takes 2 ticks to spill,
-            // not 1. Acceptable.
         }
     }
 
-    // To preserve "head of chain advances even when destination isn't a belt"
-    // semantics, we need to also clear the source's item when the destination is
-    // off-graph. Do that:
-    for (from, to) in &moves {
-        if !entity_at.contains_key(to) {
-            // Dest is off-graph; clear the source so the item is "in transit" and
-            // will be picked up by belt_spillage_system this tick.
-            if let Some(&from_e) = entity_at.get(from) {
-                new_item_for_entity.insert(from_e, None);
-            }
-            // We rely on belt_spillage_system having already run earlier this tick
-            // OR running next tick to actually spawn the OreDrop. See Task 6.
-        }
-    }
-
+    // Apply.
     for (e, _, mut bt) in belts_q.iter_mut() {
         if let Some(&new_item) = new_item_for_entity.get(&e) {
             bt.item = new_item;
@@ -1103,17 +1087,16 @@ pub fn belt_tick_system(
 ```
 
 **Notes for the implementer:**
-- All algorithmic correctness is in the pure helper — this system is just glue.
-- The HashMap → BTreeMap distinction matters: snapshot uses `BTreeMap` to feed the deterministic pure helper; the writeback HashMap is local-only and doesn't affect determinism.
-- Spillage interaction: `belt_spillage_system` (Task 6) runs AFTER `belt_tick_system` in the same tick (see app.rs set ordering). The above writeback correctly clears the source's item when the destination is off-graph; spillage detects "item moved off the belt" by computing `next_tile(pos, dir)` and seeing nothing there — but it needs to know the item WAS on this belt at start of tick. **Cleaner approach:** spillage uses its own snapshot at the start of the tick (run BEFORE belt_tick) and detects "this belt has an item AND its `next_tile` isn't a belt or smelter" → spill the item. Then belt_tick proceeds with the item already cleared. Tasks 4, 6 must coordinate; the cleanest set order is:
+- All algorithmic correctness is in the pure `belt::compute_belt_advances` helper — this Bevy system is just snapshot + filter + writeback glue.
+- All maps use `BTreeMap`/`BTreeSet` for deterministic iteration (M4 lesson on replicon determinism).
+- Run order: by the time this system fires, `belt_spillage_system` has already run this tick. Spillage detects "item on belt whose `next_tile` is not a belt or machine" and spawns an OreDrop + clears the belt slot. So when `belt_tick_system` fires, every remaining item has a belt-or-machine destination. The off-graph filter in the writeback loop is defense-in-depth.
+- Set order in `configure_sets`:
   1. **BeltPickup** (OreDrop → empty belt)
   2. **BeltSpillage** (items at dead-end belts → OreDrop, clear belt slot)
-  3. **BeltTick** (advance remaining items)
+  3. **BeltTick** (this system: advance remaining items belt-to-belt)
   4. **SmelterBeltIo** (pull/push via direction-of-belt rule)
   5. **SmelterTick** (existing — process queue, produce bars)
   6. **SmelterUi** (existing — UI refresh)
-
-  This is one tick later than the spec's nominal order but is logically equivalent and avoids the "where did this item come from" coordination problem. Update Task 6 and the smoke-checkpoint pointers accordingly.
 
 - [ ] **Step 2: Register module + system**
 
@@ -1578,7 +1561,11 @@ fn belts_empty_default_round_trips() {
 
 #[test]
 fn version_3_rejects_v2_saves() {
-    // Construct a SaveData and force version=2 then try to deserialize.
+    // Construct a SaveData with the v3 body shape, force version=2, then
+    // try to deserialize. The version check fires before / regardless of
+    // body validation, so this exercises the version-mismatch path even
+    // though the body is technically v3-shaped — we only care that the
+    // result is rejected.
     let mut data = sample_save_data();
     data.version = 2;
     let s = save::serialize_ron(&data).expect("ser");
@@ -1796,7 +1783,7 @@ pub fn can_place_belt(
 }
 ```
 
-(Add a 1-2 unit tests for `can_place_belt` to `tests/belt.rs` while you're here — bumps the count to ~18.)
+Add 2 unit tests for `can_place_belt` to `tests/belt.rs` (one for the happy path, one for occupied-tile rejection). Test count target rises to **18 belt + 3 save + 2 net_events = 124 total**.
 
 Then both call sites project into that shape:
 - `belt_place_system`: `let in_bounds_and_floor = grid.get(tile.x, tile.y).is_some_and(|g| !g.solid);` and build `occupied: BTreeSet<IVec2>` from belts + shops + smelters queries.
@@ -1909,7 +1896,7 @@ Register in `MultiplayerPlugin::build` (Update, no run-condition — `Added<Belt
 cargo build 2>&1 | tail -20
 cargo test 2>&1 | grep "test result"
 ```
-Expected: 122 tests still passing. Build clean.
+Expected: 124 tests still passing (122 prior + 2 new can_place_belt). Build clean.
 
 - [ ] **Step 6: Commit**
 
@@ -1956,7 +1943,7 @@ If any item fails, surface to controller for triage before Task 11.
 ```bash
 cargo test 2>&1 | grep "test result"
 ```
-Expected: ~122 tests passing across all suites.
+Expected: ~124 tests passing across all suites.
 
 - [ ] **Step 2: Manual exit-criteria walkthrough**
 
