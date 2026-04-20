@@ -2,8 +2,9 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use crate::belt::{self, BeltTile};
-use crate::components::OreDrop;
-use crate::coords::world_to_tile;
+use crate::components::{OreDrop, Smelter};
+use crate::coords::{tile_center_world, world_to_tile};
+use crate::systems::hud::item_color;
 
 pub const BELT_TICK_SECONDS: f32 = 1.0;
 
@@ -84,5 +85,38 @@ pub fn belt_pickup_system(
             available_tiles.remove(&pos);
             break;
         }
+    }
+}
+
+pub fn belt_spillage_system(
+    mut commands: Commands,
+    mut belts_q: Query<(&Transform, &mut BeltTile)>,
+    smelter_xf_q: Query<&Transform, With<Smelter>>,
+) {
+    let belt_positions: HashSet<bevy::math::IVec2> = belts_q
+        .iter()
+        .map(|(xf, _)| world_to_tile(xf.translation.truncate()))
+        .collect();
+    let smelter_positions: HashSet<bevy::math::IVec2> = smelter_xf_q
+        .iter()
+        .map(|xf| world_to_tile(xf.translation.truncate()))
+        .collect();
+
+    for (xf, mut bt) in belts_q.iter_mut() {
+        let Some(item) = bt.item else { continue };
+        let pos = world_to_tile(xf.translation.truncate());
+        let dest = belt::next_tile(pos, bt.dir);
+        if belt_positions.contains(&dest) || smelter_positions.contains(&dest) { continue }
+        let dest_world = tile_center_world(dest);
+        commands.spawn((
+            OreDrop { item },
+            Sprite {
+                color: item_color(item),
+                custom_size: Some(Vec2::splat(6.0)),
+                ..default()
+            },
+            Transform::from_translation(dest_world.extend(4.0)),
+        ));
+        bt.item = None;
     }
 }

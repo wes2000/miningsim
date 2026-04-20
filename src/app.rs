@@ -94,6 +94,7 @@ impl Plugin for MiningSimPlugin {
             // to fire request events instead of mutating directly (Task 10).
             .insert_resource(belt_sys::BeltTickTimer::default())
             .add_systems(Update, belt_sys::belt_pickup_system.in_set(MachineSet::BeltPickup))
+            .add_systems(Update, belt_sys::belt_spillage_system.in_set(MachineSet::BeltSpillage))
             .add_systems(Update, belt_sys::belt_tick_system.in_set(MachineSet::BeltTick))
             .insert_resource(belt_ui::BeltBuildMode::default())
             .add_systems(Update, (
