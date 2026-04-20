@@ -207,13 +207,25 @@ pub fn spawn_player_for_new_clients(
         })
         .unwrap_or(Vec2::ZERO);
     info!("spawning player for connected client `{client_entity}` (network_id {net_owner})");
+    // Add host-local `RemotePlayer` tag + `Sprite` so the host window actually
+    // renders the joining player. Neither is replicated (they're not in the
+    // `.replicate::<T>()` chain, and Sprite isn't replicon-serializable
+    // anyway), so they stay local to the host. The client's arrival of this
+    // entity triggers its own `mark_local_player_on_arrival` which attaches
+    // its own Sprite + RemotePlayer tag client-side.
     commands.spawn((
         Player,
+        RemotePlayer,
         OwningClient(client_entity),
         NetOwner(net_owner),
         Money::default(),
         Inventory::default(),
         OwnedTools::default(),
+        Sprite {
+            color: REMOTE_PLAYER_COLOR,
+            custom_size: Some(Vec2::splat(PLAYER_SPRITE_SIZE)),
+            ..default()
+        },
         Transform::from_translation(spawn_world.extend(10.0)),
         Replicated,
     ));

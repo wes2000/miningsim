@@ -69,7 +69,15 @@ impl Plugin for MultiplayerPlugin {
                 handle_smelt_all_requests,
                 handle_collect_all_requests,
                 handle_sell_all_requests,
-                handle_client_position_updates,
+                // Position updates MUST run before handle_dig_requests in the
+                // same tick so the reach check sees the client's latest
+                // authoritative position. Without this ordering, a DigRequest
+                // and a ClientPositionUpdate arriving in the same tick would
+                // race — if dig runs first with stale Transform, the reach
+                // check rejects any dig more than 2 tiles from the last-known
+                // position (including silently rejecting legitimate digs the
+                // moment a client walks past its own stale footprint).
+                handle_client_position_updates.before(handle_dig_requests),
             )
                 .run_if(server_running),
         );
