@@ -532,6 +532,99 @@ net_events serde round-trip).
   collapse into one component, breaking either server routing or
   client identification.
 
+## Playtest Results — Milestone 5a (2026-04-19)
+
+Conveyor-belt MVP in single-player. Pure `belt` module
+(`BeltDir`/`BeltTile`/`BeltVisual` + `compute_belt_advances`
+back-pressure helper + `belt_visual_kind` corner derivation). Build-mode
+UX: `B` to toggle, scroll-wheel to rotate, left-click to place,
+right-click to remove (spills any carried item as an `OreDrop`).
+Gameplay systems: `belt_tick_system` advances items one tile/second
+with lockstep cascade + saturated-cycle rotation; `belt_pickup_system`
+sucks matching-tile `OreDrop` sprites onto empty belts;
+`belt_spillage_system` ejects items whose next tile isn't a belt/smelter
+back onto the floor; `smelter_belt_io_system` pulls ore from adjacent
+belts pointing into a smelter (with a soft `SMELTER_QUEUE_CAP = 8` to
+prevent belts from jamming a busy smelter) and pushes finished bars onto
+adjacent belts pointing away, priority N → E → S → W. `Tool::BeltUnlock`
+(200c shop button) gates build-mode. `SAVE_VERSION` bumped 2 → 3; belts
+and their in-flight items persist via F5/F9 and auto-save on quit.
+
+Test count: **124 passing** (101 pre-M5a + 18 belt pure-module + 3 save
+round-trip + 2 net_events serde).
+
+**Multiplayer deferred — M4 networking debt surfaced in smoke #3:**
+
+Smoke test #3 (two-window co-op) was the first M4+ test where both
+players actually mined. It revealed two pre-existing bugs that M4's
+smoke test missed:
+
+1. **Grid replication is unreliable at scale.** Replicon ships the
+   full `Grid` component (`~80 KB` at 80×200) on every host-side dig,
+   which fragments into ~53 UDP packets per change. At real-world dig
+   cadence (~150 ms cooldown) the unreliable channel drops enough
+   fragments that clients never reassemble a consistent grid snapshot,
+   so remote mining never visually propagates. The M4 playtest notes
+   flagged this as a future concern; it's now blocking. Fix: switch
+   to per-tile delta events via `add_server_event` so only the changed
+   tile ships, or move Grid replication to a reliable channel.
+2. **Client → host `Transform` is never synced.** Client movement
+   updates are local-only; replicon's default `.replicate::<Transform>()`
+   only flows host → client. The server-side `handle_dig_requests`
+   reach check uses the host's (stale) view of `player_xf.translation`
+   — anchored at spawn forever — so client digs beyond spawn reach are
+   silently rejected. Fix: either add a `MoveRequest`/`PositionUpdate`
+   client event, or explicit client-authoritative replication for
+   LocalPlayer's Transform.
+
+M5a's Task 10 (belt replication + server handlers + client branching)
+was implemented and reverted: the code was correct in isolation, but
+without fixes to (1) and (2) it couldn't be smoke-tested end-to-end,
+and shipping apparently-working-but-actually-broken MP belts would
+have masked the underlying debt. Single-player belts shipped as-is;
+belt-MP returns in M5b alongside the above networking fixes. The
+reverted commit stays in git history for reference.
+
+**What felt good:**
+- The pure `belt` module is the cleanest pure-data module in the repo.
+  `compute_belt_advances` handles chains, saturated cycles, rho-shape
+  graphs, and Y-merges via a single lockstep fixed-point algorithm;
+  the 8 unit tests cover each case independently of Bevy.
+- Splitting Task 4 (`belt_tick_system`) from Task 1 (the pure helper)
+  kept the Bevy system to ~60 lines of snapshot + writeback glue, with
+  all correctness living in the testable pure function.
+- `SMELTER_QUEUE_CAP = 8` emerged from thinking about the "belt jams
+  a busy smelter" failure mode before it happened. Single-player
+  smoke #2 confirmed it plays as designed.
+- `BeltVisual` (locally derived, never replicated) is the right shape
+  for cosmetics-only components. `belt_visual_recompute_system` gates
+  on `Changed<BeltTile>` + `RemovedComponents` so it's free when the
+  belt graph is static.
+
+**What felt off (and was fixed mid-flight):**
+- M5a plan drafts used `BTreeMap<IVec2, _>` for deterministic iteration,
+  but `bevy::math::IVec2` doesn't implement `Ord` in Bevy 0.15. Pivoted
+  to `HashMap`/`HashSet`; determinism is preserved by sorting the output
+  of `compute_belt_advances` inside the helper itself.
+- Initial plan for save/load had `save::apply` mutate entities
+  directly, pulling Bevy types into the pure module. Refactored to
+  return `Vec<(IVec2, BeltTile)>` and let the calling system do the
+  despawn/respawn with `Commands` — keeps `save` Bevy-free.
+
+**Decisions for M5b:**
+- **Fix M4's networking debt before adding any new networked feature.**
+  Grid delta replication + client→host Transform sync are the unblockers
+  for MP belts, MP smelter feeds, and any future spatial feature. Pick
+  an M5b spec that bundles these fixes + belt-MP + whatever the next
+  conveyor-adjacent feature is (e.g., requesters/providers, buffer
+  chests).
+- **Don't expand Grid beyond 80×200 until delta replication lands.**
+  At 200×500 the full-snapshot channel collapses outright.
+- **Belt MP replication is a known-good pattern once delivery works.**
+  Task 10's reverted design (`.replicate::<BeltTile>()` + server
+  `PlaceBeltRequest`/`RemoveBeltRequest` handlers + client
+  `add_belt_visuals_on_arrival`) is ready to re-land as-is.
+
 ## What This Document Is Not
 
 - Not a spec. Specs live in `docs/superpowers/specs/` and are per-milestone.
