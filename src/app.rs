@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::systems::{camera, chunk_lifecycle, chunk_render, hud, ore_drop, player, setup, shop, shop_ui, smelter};
+use crate::systems::{belt_ui, camera, chunk_lifecycle, chunk_render, hud, ore_drop, player, setup, shop, shop_ui, smelter};
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum InputSet { ReadInput, ApplyInput }
@@ -74,7 +74,19 @@ impl Plugin for MiningSimPlugin {
                 hud::toggle_inventory_popup_system.in_set(UiSet::Hud),
                 hud::sync_inventory_popup_visibility_system.in_set(UiSet::Hud),
                 camera::camera_follow_system.in_set(UiSet::Camera),
-            ));
+            ))
+            // Build-mode UI (M5a Task 3). Local per-peer state; not gated on
+            // NetMode here — placement/removal branch internally on Client mode
+            // to fire request events instead of mutating directly (Task 10).
+            .insert_resource(belt_ui::BeltBuildMode::default())
+            .add_systems(Update, (
+                belt_ui::belt_build_toggle_system,
+                belt_ui::belt_build_rotate_system,
+                belt_ui::belt_ghost_render_system,
+                belt_ui::belt_place_system,
+                belt_ui::belt_remove_system,
+                belt_ui::belt_visual_recompute_system,
+            ).in_set(UiSet::Hud));
 
         // Mode-conditional plugin loading
         let net_mode = app.world().resource::<crate::net::NetMode>().clone();

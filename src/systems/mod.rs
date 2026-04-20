@@ -1,3 +1,4 @@
+pub mod belt_ui;
 pub mod camera;
 pub mod chunk_lifecycle;
 pub mod chunk_render;
